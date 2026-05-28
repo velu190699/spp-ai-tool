@@ -1,0 +1,11 @@
+paths:
+  downloads_dir: C:/Users/lcarrion/OneDrive - PCI Energy Solutions/Documents/SPP AGENT/downloads
+  extracted_dir: C:/Users/lcarrion/OneDrive - PCI Energy Solutions/Documents/SPP AGENT/extracted
+  temp_dir: C:/Users/lcarrion/OneDrive - PCI Energy Solutions/Documents/SPP AGENT/temp
+  sharepoint_mirror_dir: C:/Users/lcarrion/OneDrive - PCI Energy Solutions/Documents/SPP AGENT/sharepoint_mirror
+  reports_dir: C:/Users/lcarrion/OneDrive - PCI Energy Solutions/Documents/SPP AGENT/reports
+  state_file: data/state/metadata.json
+  logs_dir: logs
+
+logging:
+  level: INFO
