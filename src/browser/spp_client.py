@@ -98,7 +98,7 @@ class SppClient:
 
     def download(self, document: SppDocument, target_dir: Path) -> Path:
         target = target_dir / f"{document.document_id}_{document.filename}"
-        download_to_path(document.url, target, timeout=max(self.timeout, 120))
+        download_to_path(document.url, target, timeout=max(self.timeout, 120), session=self.session)
         return target
 
 

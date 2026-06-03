@@ -7,16 +7,12 @@ __pycache__/
 
 data/downloads/*
 data/extracted/*
-data/temp/*
-data/sharepoint_mirror/*
 data/state/*
 data/reports/*
 logs/*
 
 !data/downloads/.gitkeep
 !data/extracted/.gitkeep
-!data/temp/.gitkeep
-!data/sharepoint_mirror/.gitkeep
 !data/state/.gitkeep
 !data/reports/.gitkeep
 !logs/.gitkeep

@@ -23,9 +23,15 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def download_to_path(url: str, path: Path, timeout: int = 120) -> None:
+def download_to_path(
+    url: str,
+    path: Path,
+    timeout: int = 120,
+    session: requests.Session | None = None,
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with requests.get(url, stream=True, timeout=timeout) as response:
+    requester = session if session is not None else requests
+    with requester.get(url, stream=True, timeout=timeout) as response:
         response.raise_for_status()
         with path.open("wb") as handle:
             for chunk in response.iter_content(chunk_size=1024 * 1024):

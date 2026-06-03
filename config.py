@@ -15,14 +15,6 @@ CUF_QUERY = "CUF Meeting Materials"
 SUF_QUERY = "SUF Meeting Materials"
 PROTOCOL_QUERY = "Integrated Marketplace Protocols"
 
-SHAREPOINT_FOLDERS = {
-    "rr_master_list": "rr-master-list",
-    "cuf": "cuf-meeting-materials",
-    "suf": "suf-meeting-materials",
-    "protocol": "protocols",
-    "recommendation_reports": "recommendation-reports",
-}
-
 LOW_TEXT_CHAR_THRESHOLD = 50
 
 
@@ -30,8 +22,6 @@ LOW_TEXT_CHAR_THRESHOLD = 50
 class AppConfig:
     downloads_dir: Path
     extracted_dir: Path
-    temp_dir: Path
-    sharepoint_mirror_dir: Path
     state_file: Path
     reports_dir: Path
     logs_dir: Path
@@ -47,8 +37,6 @@ def load_config(path: str = "config.yaml") -> AppConfig:
     return AppConfig(
         downloads_dir=Path(paths.get("downloads_dir", "data/downloads")),
         extracted_dir=Path(paths.get("extracted_dir", "data/extracted")),
-        temp_dir=Path(paths.get("temp_dir", "data/temp")),
-        sharepoint_mirror_dir=Path(paths.get("sharepoint_mirror_dir", "data/sharepoint_mirror")),
         state_file=Path(paths.get("state_file", "data/state/metadata.json")),
         reports_dir=Path(paths.get("reports_dir", "data/reports")),
         logs_dir=Path(paths.get("logs_dir", "logs")),
@@ -60,8 +48,6 @@ def ensure_runtime_dirs(config: AppConfig) -> None:
     for directory in (
         config.downloads_dir,
         config.extracted_dir,
-        config.temp_dir,
-        config.sharepoint_mirror_dir,
         config.state_file.parent,
         config.reports_dir,
         config.logs_dir,

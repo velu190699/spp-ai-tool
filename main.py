@@ -11,7 +11,6 @@ from config import (
     CUF_QUERY,
     PROTOCOL_QUERY,
     RR_MASTER_QUERY,
-    SHAREPOINT_FOLDERS,
     SUF_QUERY,
     ensure_runtime_dirs,
     load_config,
@@ -23,7 +22,6 @@ from src.documents.pdf_parser import parse_pdf
 from src.documents.rr_extractor import merge_mentions
 from src.documents.zip_utils import extract_first_recommendation_report, extract_pdfs
 from src.notifications.notifier import log_slack_draft
-from src.sharepoint.sharepoint_client import LocalSharePointClient
 from src.state.metadata_store import MetadataStore
 from src.summaries.summarizer import build_run_summary
 
@@ -120,7 +118,6 @@ def process_pdf_family(
     *,
     family: str,
     files: list[Path],
-    sharepoint: LocalSharePointClient,
     warnings: list[str],
     dry_run: bool,
 ) -> dict[str, Any]:
@@ -133,8 +130,7 @@ def process_pdf_family(
         warnings.extend(parsed.warnings)
         all_mentions.extend(parsed.rr_mentions)
         if not dry_run:
-            stored_file = sharepoint.store_file(pdf_path, SHAREPOINT_FOLDERS[family])
-            stored.append(str(stored_file.destination))
+            stored.append(str(pdf_path))
     return {"stored": stored, "mentions": merge_mentions(all_mentions)}
 
 
@@ -167,7 +163,6 @@ def process_recommendation_reports(
     client: SppClient,
     state: MetadataStore,
     config,
-    sharepoint: LocalSharePointClient,
     dry_run: bool,
     warnings: list[str],
     skipped: list[str],
@@ -206,12 +201,11 @@ def process_recommendation_reports(
             warnings.append(warning)
             LOGGER.warning(warning)
             continue
-        stored_file = sharepoint.store_file(report, SHAREPOINT_FOLDERS["recommendation_reports"])
         stored_reports.append(
             {
                 "rr_number": rr["rr_number"],
                 "package": document_summary(document),
-                "stored": str(stored_file.destination),
+                "stored": str(report),
             }
         )
     return stored_reports
@@ -223,7 +217,6 @@ def run(dry_run: bool) -> int:
     setup_logging(config.logs_dir, config.logging_level)
     state = MetadataStore(config.state_file)
     client = SppClient()
-    sharepoint = LocalSharePointClient(config.sharepoint_mirror_dir)
     run_id = datetime.now().strftime("%Y%m%d-%H%M%S")
     warnings: list[str] = []
     skipped: list[str] = []
@@ -270,7 +263,6 @@ def run(dry_run: bool) -> int:
         if rr_master_path is None:
             raise RuntimeError("RR Master List path unavailable")
         open_rrs = read_open_rrs(rr_master_path)
-        sharepoint.store_file(rr_master_path, SHAREPOINT_FOLDERS["rr_master_list"])
 
     cuf_path, cuf_is_new = get_or_download(
         family="cuf",
@@ -314,13 +306,13 @@ def run(dry_run: bool) -> int:
             # RR mentions may appear in any agenda/material attachment.
             cuf_pdfs = extract_pdfs(cuf_path, config.extracted_dir / "cuf" / cuf_doc.document_id)
             family_outputs["cuf"] = process_pdf_family(
-                family="cuf", files=cuf_pdfs, sharepoint=sharepoint, warnings=warnings, dry_run=dry_run
+                family="cuf", files=cuf_pdfs, warnings=warnings, dry_run=dry_run
             )
         elif cuf_path:
             skipped.append(f"CUF already processed: {cuf_doc.filename}")
         if suf_path and suf_is_new:
             family_outputs["suf"] = process_pdf_family(
-                family="suf", files=[suf_path], sharepoint=sharepoint, warnings=warnings, dry_run=dry_run
+                family="suf", files=[suf_path], warnings=warnings, dry_run=dry_run
             )
         elif suf_path:
             skipped.append(f"SUF already processed: {suf_doc.filename}")
@@ -339,7 +331,6 @@ def run(dry_run: bool) -> int:
         client=client,
         state=state,
         config=config,
-        sharepoint=sharepoint,
         dry_run=dry_run,
         warnings=warnings,
         skipped=skipped,

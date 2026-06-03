@@ -1,10 +1,8 @@
 paths:
-  downloads_dir: C:/Users/lcarrion/OneDrive - PCI Energy Solutions/Documents/SPP AGENT/downloads
-  extracted_dir: C:/Users/lcarrion/OneDrive - PCI Energy Solutions/Documents/SPP AGENT/extracted
-  temp_dir: C:/Users/lcarrion/OneDrive - PCI Energy Solutions/Documents/SPP AGENT/temp
-  sharepoint_mirror_dir: C:/Users/lcarrion/OneDrive - PCI Energy Solutions/Documents/SPP AGENT/sharepoint_mirror
-  reports_dir: C:/Users/lcarrion/OneDrive - PCI Energy Solutions/Documents/SPP AGENT/reports
+  downloads_dir: C:/Users/lcarrion/OneDrive - PCI Energy Solutions/Market Systems - ISO Agent Market Updates/downloads
+  extracted_dir: C:/Users/lcarrion/OneDrive - PCI Energy Solutions/Market Systems - ISO Agent Market Updates/extracted
   state_file: data/state/metadata.json
+  reports_dir: data/reports
   logs_dir: logs
 
 logging:
