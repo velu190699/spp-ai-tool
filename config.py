@@ -11,8 +11,8 @@ SPP_BASE_URL = "https://www.spp.org"
 DOCUMENT_SEARCH_PATH = "/spp-documents-filings/"
 
 RR_MASTER_QUERY = "RR Master List"
-CUF_QUERY = "CUF Meeting Materials"
-SUF_QUERY = "SUF Meeting Materials"
+CUF_QUERY = "CUF"
+SUF_QUERY = "SUF"
 PROTOCOL_QUERY = "Integrated Marketplace Protocols"
 
 LOW_TEXT_CHAR_THRESHOLD = 50
@@ -20,8 +20,11 @@ LOW_TEXT_CHAR_THRESHOLD = 50
 
 @dataclass(frozen=True)
 class AppConfig:
-    downloads_dir: Path
-    extracted_dir: Path
+    cuf_dir: Path
+    suf_dir: Path
+    protocols_dir: Path
+    recommendation_reports_dir: Path
+    rr_master_list_dir: Path
     state_file: Path
     reports_dir: Path
     logs_dir: Path
@@ -35,8 +38,11 @@ def load_config(path: str = "config.yaml") -> AppConfig:
     paths = raw.get("paths", {})
     logging = raw.get("logging", {})
     return AppConfig(
-        downloads_dir=Path(paths.get("downloads_dir", "data/downloads")),
-        extracted_dir=Path(paths.get("extracted_dir", "data/extracted")),
+        cuf_dir=Path(paths.get("cuf_dir", "data/CUF")),
+        suf_dir=Path(paths.get("suf_dir", "data/SUF")),
+        protocols_dir=Path(paths.get("protocols_dir", "data/Protocols")),
+        recommendation_reports_dir=Path(paths.get("recommendation_reports_dir", "data/Recommendation_Reports")),
+        rr_master_list_dir=Path(paths.get("rr_master_list_dir", "data/RR_Master_List")),
         state_file=Path(paths.get("state_file", "data/state/metadata.json")),
         reports_dir=Path(paths.get("reports_dir", "data/reports")),
         logs_dir=Path(paths.get("logs_dir", "logs")),
@@ -46,8 +52,11 @@ def load_config(path: str = "config.yaml") -> AppConfig:
 
 def ensure_runtime_dirs(config: AppConfig) -> None:
     for directory in (
-        config.downloads_dir,
-        config.extracted_dir,
+        config.cuf_dir,
+        config.suf_dir,
+        config.protocols_dir,
+        config.recommendation_reports_dir,
+        config.rr_master_list_dir,
         config.state_file.parent,
         config.reports_dir,
         config.logs_dir,

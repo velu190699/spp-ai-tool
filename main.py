@@ -74,26 +74,48 @@ def get_or_download(
     downloads_dir: Path,
     dry_run: bool,
     warnings: list[str],
+    redownload_on_hash_change: bool = False,
 ) -> tuple[Path | None, bool]:
-    # Business duplicate identity is intentionally SPP document ID + filename.
-    # A changed hash for the same identity is reported, but it is not treated as
-    # a new material in v1.
     existing = state.check_document(document.document_id, document.filename)
     cached_path = state.latest_local_path(document.document_id, document.filename)
+
     if not existing.is_new and cached_path:
-        LOGGER.info("%s already tracked: %s", family, document.filename)
-        return cached_path, False
+        if not redownload_on_hash_change:
+            LOGGER.info("%s already tracked: %s", family, document.filename)
+            return cached_path, False
+        # For documents like RR Master List: download to a temp path,
+        # compare hash, and only keep it if the content actually changed.
+        if dry_run:
+            LOGGER.info("Dry-run: would check hash for %s", document.url)
+            return cached_path, False
+        temp_path = client.download(document, downloads_dir)
+        new_hash = sha256_file(temp_path)
+        old_hash = existing.existing.get("sha256") if existing.existing else None
+        if old_hash and new_hash == old_hash:
+            temp_path.unlink()  # same content, discard
+            LOGGER.info("%s content unchanged (hash match): %s", family, document.filename)
+            return cached_path, False
+        # Content changed — keep new file, record as updated
+        LOGGER.info("%s content changed (new hash): %s", family, document.filename)
+        state.record_document(
+            document.document_id,
+            document.filename,
+            {
+                "family": family,
+                "title": document.title,
+                "url": document.url,
+                "sha256": new_hash,
+                "local_path": str(temp_path),
+            },
+        )
+        return temp_path, True  # is_new=True signals "treat as updated"
+
     if dry_run:
         LOGGER.info("Dry-run: would download %s", document.url)
         return None, existing.is_new
 
-    local_path = client.download(document, downloads_dir / family)
+    local_path = client.download(document, downloads_dir)
     file_hash = sha256_file(local_path)
-    post_download = state.check_document(document.document_id, document.filename, file_hash)
-    if post_download.hash_changed:
-        warning = f"{family}: same SPP ID/name has changed hash; keeping existing identity only: {document.filename}"
-        warnings.append(warning)
-        LOGGER.warning(warning)
     state.record_document(
         document.document_id,
         document.filename,
@@ -185,17 +207,25 @@ def process_recommendation_reports(
             document=document,
             client=client,
             state=state,
-            downloads_dir=config.downloads_dir,
+            downloads_dir=config.recommendation_reports_dir,
             dry_run=dry_run,
             warnings=warnings,
         )
+        # Skip if the docx already exists on disk
+        existing_docx = config.recommendation_reports_dir / f"rr{rr['rr_number']}" / f"RR{rr['rr_number']} Recommendation Report.docx"
+        if existing_docx.exists() and not dry_run:
+            LOGGER.info("RR%s: Recommendation Report already on disk, skipping", rr['rr_number'])
+            stored_reports.append({"rr_number": rr["rr_number"], "stored": str(existing_docx), "skipped": True})
+            continue
         if dry_run or zip_path is None:
             stored_reports.append({"rr_number": rr["rr_number"], "package": document_summary(document), "dry_run": True})
             continue
-        target_dir = config.extracted_dir / "recommendation_reports" / f"rr{rr['rr_number']}"
+        target_dir = config.recommendation_reports_dir / f"rr{rr['rr_number']}"
         # Store only the first exact Recommendation Report filename. Other Word
         # files in the RR package are not substitutes for this v1 contract.
         report = extract_first_recommendation_report(zip_path, rr["rr_number"], target_dir)
+        if report and zip_path.exists():
+            zip_path.unlink()  # delete the zip after extracting
         if not report:
             warning = f"RR{rr['rr_number']}: no exact Recommendation Report docx found in package"
             warnings.append(warning)
@@ -236,7 +266,7 @@ def run(dry_run: bool) -> int:
     )
     protocol_doc = client.latest_document(
         PROTOCOL_QUERY,
-        and_match(title_contains("Integrated Marketplace Protocols", "Active Version"), extension_is(".zip")),
+        and_match(title_contains("Integrated Marketplace Protocols"), extension_is(".zip"), lambda doc: "active ver" in doc.title.lower()),
     )
 
     discovered.update(
@@ -248,14 +278,15 @@ def run(dry_run: bool) -> int:
         }
     )
 
-    rr_master_path, _ = get_or_download(
+    rr_master_path, rr_master_is_new = get_or_download(
         family="rr_master_list",
         document=rr_master_doc,
         client=client,
         state=state,
-        downloads_dir=config.downloads_dir,
+        downloads_dir=config.rr_master_list_dir,
         dry_run=dry_run,
         warnings=warnings,
+        redownload_on_hash_change=True,
     )
     if dry_run:
         open_rrs = {}
@@ -269,7 +300,7 @@ def run(dry_run: bool) -> int:
         document=cuf_doc,
         client=client,
         state=state,
-        downloads_dir=config.downloads_dir,
+        downloads_dir=config.cuf_dir,
         dry_run=dry_run,
         warnings=warnings,
     )
@@ -278,7 +309,7 @@ def run(dry_run: bool) -> int:
         document=suf_doc,
         client=client,
         state=state,
-        downloads_dir=config.downloads_dir,
+        downloads_dir=config.suf_dir,
         dry_run=dry_run,
         warnings=warnings,
     )
@@ -286,36 +317,63 @@ def run(dry_run: bool) -> int:
     if protocol_doc:
         # Protocol ZIPs are source archives only in v1: retain the raw ZIP, do
         # not extract content, and do not include it in summaries.
-        get_or_download(
+        protocol_path, _ = get_or_download(
             family="protocol",
             document=protocol_doc,
             client=client,
             state=state,
-            downloads_dir=config.downloads_dir,
+            downloads_dir=config.protocols_dir,
             dry_run=dry_run,
             warnings=warnings,
         )
+        if protocol_path and protocol_path.exists():
+            from src.documents.zip_utils import extract_matching
+            protocol_folder = config.protocols_dir / protocol_path.stem
+            extract_matching(protocol_path, protocol_folder, (".pdf", ".docx", ".xlsx"))
+            protocol_path.unlink()  # delete the zip after extracting
     else:
         warnings.append("Integrated Marketplace Protocol Active Version not found; continuing")
 
     mentioned: dict[str, dict[str, Any]] = {}
     family_outputs: dict[str, Any] = {}
+
+    # Determine if a full re-cross is needed.
+    # Any change in CUF, SUF, or RR Master List triggers a new cross.
+    any_change = cuf_is_new or suf_is_new or rr_master_is_new
+
     if not dry_run:
         if cuf_path and cuf_is_new:
-            # CUF is published as a ZIP; every PDF inside it is parsed because
-            # RR mentions may appear in any agenda/material attachment.
-            cuf_pdfs = extract_pdfs(cuf_path, config.extracted_dir / "cuf" / cuf_doc.document_id)
+            cuf_folder = config.cuf_dir / cuf_path.stem
+            cuf_pdfs = extract_pdfs(cuf_path, cuf_folder)
+            cuf_path.unlink()  # delete the zip after extracting
             family_outputs["cuf"] = process_pdf_family(
                 family="cuf", files=cuf_pdfs, warnings=warnings, dry_run=dry_run
             )
+        elif cuf_path and any_change:
+            # CUF unchanged but Master List or SUF changed — re-parse existing CUF PDFs
+            LOGGER.info("Re-parsing existing CUF due to changes in other sources")
+            existing_cuf_pdfs = list(config.cuf_dir.rglob("*.pdf"))
+            if existing_cuf_pdfs:
+                family_outputs["cuf"] = process_pdf_family(
+                    family="cuf", files=existing_cuf_pdfs, warnings=warnings, dry_run=dry_run
+                )
         elif cuf_path:
-            skipped.append(f"CUF already processed: {cuf_doc.filename}")
+            skipped.append(f"CUF unchanged, no re-cross needed: {cuf_doc.filename}")
+
         if suf_path and suf_is_new:
             family_outputs["suf"] = process_pdf_family(
                 family="suf", files=[suf_path], warnings=warnings, dry_run=dry_run
             )
+        elif suf_path and any_change:
+            # SUF unchanged but CUF or Master List changed — re-parse existing SUF
+            LOGGER.info("Re-parsing existing SUF due to changes in other sources")
+            existing_suf_pdfs = list(config.suf_dir.rglob("*.pdf"))
+            if existing_suf_pdfs:
+                family_outputs["suf"] = process_pdf_family(
+                    family="suf", files=existing_suf_pdfs, warnings=warnings, dry_run=dry_run
+                )
         elif suf_path:
-            skipped.append(f"SUF already processed: {suf_doc.filename}")
+            skipped.append(f"SUF unchanged, no re-cross needed: {suf_doc.filename}")
 
         for output in family_outputs.values():
             for rr_number, data in output.get("mentions", {}).items():
@@ -325,7 +383,12 @@ def run(dry_run: bool) -> int:
                         if item not in entry[key]:
                             entry[key].append(item)
 
-    relevant_rrs = build_relevant_rrs(open_rrs, mentioned)
+    # Only build relevant RRs if something changed — otherwise use last known state
+    if any_change or dry_run:
+        relevant_rrs = build_relevant_rrs(open_rrs, mentioned)
+    else:
+        LOGGER.info("No changes detected — skipping RR cross and report download")
+        relevant_rrs = []
     reports = [] if dry_run else process_recommendation_reports(
         relevant_rrs=relevant_rrs,
         client=client,

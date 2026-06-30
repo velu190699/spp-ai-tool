@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+import re
+from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Callable, Iterable, Optional
 from urllib.parse import parse_qs, quote_plus, urljoin, urlparse
@@ -14,6 +16,48 @@ from src.browser.download_utils import download_to_path, sanitize_filename
 
 LOGGER = logging.getLogger(__name__)
 
+# Matches "June 12 2026", "Jun 12 2026", "12/06/2026", "2026-06-12", etc.
+_DATE_PATTERNS = [
+    re.compile(r"\b([A-Za-z]+ \d{1,2},?\s+\d{4})\b"),   # June 12 2026 / June 12, 2026
+    re.compile(r"\b(\d{1,2}/\d{1,2}/\d{4})\b"),           # 06/12/2026
+    re.compile(r"\b(\d{4}-\d{2}-\d{2})\b"),                # 2026-06-12
+]
+_DATE_FORMATS = [
+    "%B %d %Y", "%B %d, %Y",   # June 12 2026
+    "%b %d %Y", "%b %d, %Y",   # Jun 12 2026
+    "%m/%d/%Y",                 # 06/12/2026
+    "%Y-%m-%d",                 # 2026-06-12
+]
+
+
+def _parse_date(text: str) -> datetime | None:
+    """Try to parse a date string with multiple formats."""
+    text = text.strip()
+    for fmt in _DATE_FORMATS:
+        try:
+            return datetime.strptime(text, fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def _extract_published_date(anchor) -> datetime | None:
+    """Look for a publication date in the anchor's parent container."""
+    # SPP renders dates as sibling text or in a nearby element like:
+    # <li><a href="...">Title</a> <span>June 12 2026</span></li>
+    # Try the anchor's parent and its siblings/children
+    for element in [anchor.find_parent(), anchor.find_parent() and anchor.find_parent().find_parent()]:
+        if not element:
+            continue
+        text = element.get_text(" ", strip=True)
+        for pattern in _DATE_PATTERNS:
+            match = pattern.search(text)
+            if match:
+                parsed = _parse_date(match.group(1))
+                if parsed:
+                    return parsed
+    return None
+
 
 @dataclass(frozen=True)
 class SppDocument:
@@ -22,6 +66,21 @@ class SppDocument:
     filename: str
     url: str
     size_label: str = ""
+    published_date: datetime | None = field(default=None, compare=False)
+
+    @property
+    def date_suffix(self) -> str:
+        """Returns date as YYYYMMDD string for use in filenames, or empty string."""
+        if self.published_date:
+            return self.published_date.strftime("%Y%m%d")
+        return ""
+
+    def named_with_date(self, stem: str, suffix: str) -> str:
+        """Build a filename like 'RR Master List_20260612.xlsx'"""
+        date = self.date_suffix
+        if date:
+            return f"{stem}_{date}{suffix}"
+        return f"{stem}{suffix}"
 
 
 def _document_from_anchor(anchor) -> Optional[SppDocument]:
@@ -38,12 +97,14 @@ def _document_from_anchor(anchor) -> Optional[SppDocument]:
     if span:
         size_label = span.get_text(" ", strip=True).strip("()")
         title = title.replace(span.get_text(" ", strip=True), "").strip()
+    published_date = _extract_published_date(anchor)
     return SppDocument(
         document_id=document_id,
         title=title,
         filename=filename,
         url=urljoin(SPP_BASE_URL, href),
         size_label=size_label,
+        published_date=published_date,
     )
 
 
@@ -84,9 +145,6 @@ class SppClient:
         *,
         allow_site_search: bool = False,
     ) -> Optional[SppDocument]:
-        # "Latest" means first exact matching result in SPP Documents & Filings.
-        # Site-wide search is only a fallback for RR package lookups where the
-        # master-list link points to /search/?q=rr<number>.
         sources: Iterable[list[SppDocument]]
         primary = self.search_documents(document_name)
         sources = (primary, self.search_site_documents(document_name)) if allow_site_search else (primary,)
@@ -97,7 +155,11 @@ class SppClient:
         return None
 
     def download(self, document: SppDocument, target_dir: Path) -> Path:
-        target = target_dir / f"{document.document_id}_{document.filename}"
+        # Use date-based naming: "{stem}_{YYYYMMDD}{ext}"
+        # Falls back to original filename if no date available
+        path = Path(document.filename)
+        named = document.named_with_date(path.stem, path.suffix)
+        target = target_dir / named
         download_to_path(document.url, target, timeout=max(self.timeout, 120), session=self.session)
         return target
 

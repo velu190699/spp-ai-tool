@@ -1,9 +1,12 @@
 paths:
-  downloads_dir: C:/Users/lcarrion/OneDrive - PCI Energy Solutions/Market Systems - ISO Agent Market Updates/downloads
-  extracted_dir: C:/Users/lcarrion/OneDrive - PCI Energy Solutions/Market Systems - ISO Agent Market Updates/extracted
+  cuf_dir: "C:/Users/eoyarce/PCI Energy Solutions/Market Systems - ISO Agent Market Updates/SPPIM/CUF"
+  suf_dir: "C:/Users/eoyarce/PCI Energy Solutions/Market Systems - ISO Agent Market Updates/SPPIM/SUF"
+  protocols_dir: "C:/Users/eoyarce/PCI Energy Solutions/Market Systems - ISO Agent Market Updates/SPPIM/Protocols"
+  recommendation_reports_dir: "C:/Users/eoyarce/PCI Energy Solutions/Market Systems - ISO Agent Market Updates/SPPIM/Recommendation_Reports"
+  rr_master_list_dir: "C:/Users/eoyarce/PCI Energy Solutions/Market Systems - ISO Agent Market Updates/SPPIM/RR_Master_List"
   state_file: data/state/metadata.json
   reports_dir: data/reports
   logs_dir: logs
-
+ 
 logging:
   level: INFO
