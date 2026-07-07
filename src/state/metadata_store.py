@@ -50,6 +50,12 @@ class MetadataStore:
         path = Path(existing["local_path"])
         return path if path.exists() else None
 
+    def save_mentions(self, family: str, mentions: dict[str, Any]) -> None:
+        self.data.setdefault("mentions_cache", {})[family] = mentions
+
+    def load_mentions(self, family: str) -> dict[str, Any] | None:
+        return self.data.get("mentions_cache", {}).get(family)
+
     def append_run(self, run_summary: dict[str, Any]) -> None:
         self.data.setdefault("runs", []).append(run_summary)
 

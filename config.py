@@ -29,6 +29,11 @@ class AppConfig:
     reports_dir: Path
     logs_dir: Path
     logging_level: str
+    sharepoint_base_url: str
+    sharepoint_sync_root: Path
+    report_engine: str
+    claude_code_binary: str
+    report_model: str
 
 
 def load_config(path: str = "config.yaml") -> AppConfig:
@@ -37,6 +42,8 @@ def load_config(path: str = "config.yaml") -> AppConfig:
 
     paths = raw.get("paths", {})
     logging = raw.get("logging", {})
+    sharepoint = raw.get("sharepoint", {})
+    report = raw.get("report", {})
     return AppConfig(
         cuf_dir=Path(paths.get("cuf_dir", "data/CUF")),
         suf_dir=Path(paths.get("suf_dir", "data/SUF")),
@@ -47,6 +54,11 @@ def load_config(path: str = "config.yaml") -> AppConfig:
         reports_dir=Path(paths.get("reports_dir", "data/reports")),
         logs_dir=Path(paths.get("logs_dir", "logs")),
         logging_level=str(logging.get("level", "INFO")).upper(),
+        sharepoint_base_url=str(sharepoint.get("base_url", "")).rstrip("/"),
+        sharepoint_sync_root=Path(sharepoint.get("sync_root", "")),
+        report_engine=str(report.get("engine", "claude_code")),
+        claude_code_binary=str(report.get("claude_code_binary", "")),
+        report_model=str(report.get("model", "")),
     )
 
 

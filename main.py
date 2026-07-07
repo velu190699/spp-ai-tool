@@ -18,11 +18,15 @@ from config import (
 from src.browser.download_utils import sha256_file
 from src.browser.spp_client import SppClient, SppDocument, rr_search_query_from_url
 from src.documents.excel_parser import RRRecord, read_open_rrs
+from src.documents.local_source import SourceEdition, latest_cuf_edition, latest_suf_edition
 from src.documents.pdf_parser import parse_pdf
 from src.documents.rr_extractor import merge_mentions
 from src.documents.zip_utils import extract_first_recommendation_report, extract_pdfs
 from src.notifications.notifier import log_slack_draft
 from src.state.metadata_store import MetadataStore
+from src.summaries.html_renderer import render_report
+from src.summaries.report_builder import DocumentText, build_report
+from src.summaries.report_engine import build_engine
 from src.summaries.summarizer import build_run_summary
 
 LOGGER = logging.getLogger(__name__)
@@ -349,14 +353,20 @@ def run(dry_run: bool) -> int:
             family_outputs["cuf"] = process_pdf_family(
                 family="cuf", files=cuf_pdfs, warnings=warnings, dry_run=dry_run
             )
+            state.save_mentions("cuf", family_outputs["cuf"]["mentions"])
         elif cuf_path and any_change:
-            # CUF unchanged but Master List or SUF changed — re-parse existing CUF PDFs
-            LOGGER.info("Re-parsing existing CUF due to changes in other sources")
-            existing_cuf_pdfs = list(config.cuf_dir.rglob("*.pdf"))
-            if existing_cuf_pdfs:
-                family_outputs["cuf"] = process_pdf_family(
-                    family="cuf", files=existing_cuf_pdfs, warnings=warnings, dry_run=dry_run
-                )
+            cached = state.load_mentions("cuf")
+            if cached is not None:
+                LOGGER.info("Using cached CUF mentions (document unchanged)")
+                family_outputs["cuf"] = {"stored": [], "mentions": cached}
+            else:
+                LOGGER.info("No CUF mentions cache — re-parsing existing PDFs")
+                existing_cuf_pdfs = list(config.cuf_dir.rglob("*.pdf"))
+                if existing_cuf_pdfs:
+                    family_outputs["cuf"] = process_pdf_family(
+                        family="cuf", files=existing_cuf_pdfs, warnings=warnings, dry_run=dry_run
+                    )
+                    state.save_mentions("cuf", family_outputs["cuf"]["mentions"])
         elif cuf_path:
             skipped.append(f"CUF unchanged, no re-cross needed: {cuf_doc.filename}")
 
@@ -364,14 +374,20 @@ def run(dry_run: bool) -> int:
             family_outputs["suf"] = process_pdf_family(
                 family="suf", files=[suf_path], warnings=warnings, dry_run=dry_run
             )
+            state.save_mentions("suf", family_outputs["suf"]["mentions"])
         elif suf_path and any_change:
-            # SUF unchanged but CUF or Master List changed — re-parse existing SUF
-            LOGGER.info("Re-parsing existing SUF due to changes in other sources")
-            existing_suf_pdfs = list(config.suf_dir.rglob("*.pdf"))
-            if existing_suf_pdfs:
-                family_outputs["suf"] = process_pdf_family(
-                    family="suf", files=existing_suf_pdfs, warnings=warnings, dry_run=dry_run
-                )
+            cached = state.load_mentions("suf")
+            if cached is not None:
+                LOGGER.info("Using cached SUF mentions (document unchanged)")
+                family_outputs["suf"] = {"stored": [], "mentions": cached}
+            else:
+                LOGGER.info("No SUF mentions cache — re-parsing existing PDFs")
+                existing_suf_pdfs = list(config.suf_dir.rglob("*.pdf"))
+                if existing_suf_pdfs:
+                    family_outputs["suf"] = process_pdf_family(
+                        family="suf", files=existing_suf_pdfs, warnings=warnings, dry_run=dry_run
+                    )
+                    state.save_mentions("suf", family_outputs["suf"]["mentions"])
         elif suf_path:
             skipped.append(f"SUF unchanged, no re-cross needed: {suf_doc.filename}")
 
@@ -424,11 +440,98 @@ def run(dry_run: bool) -> int:
     return 0
 
 
+def _edition_documents(edition: SourceEdition, warnings: list[str]) -> list[DocumentText]:
+    """Extract text from every file in an edition, marking unreadable ones."""
+    documents: list[DocumentText] = []
+    for source_file in edition.files:
+        path = source_file.local_path
+        if path.suffix.lower() != ".pdf":
+            documents.append(
+                DocumentText(
+                    kind=edition.kind,
+                    filename=source_file.filename,
+                    sharepoint_url=source_file.sharepoint_url,
+                    text="",
+                    readable=False,
+                )
+            )
+            continue
+        parsed = parse_pdf(path)
+        warnings.extend(parsed.warnings)
+        readable = bool(parsed.text.strip())
+        documents.append(
+            DocumentText(
+                kind=edition.kind,
+                filename=source_file.filename,
+                sharepoint_url=source_file.sharepoint_url,
+                text=parsed.text,
+                readable=readable,
+            )
+        )
+    return documents
+
+
+def _load_latest_relevant_rrs(reports_dir: Path) -> list[dict[str, Any]]:
+    """Best-effort: reuse the most recent relevant-rrs JSON to enrich the report."""
+    candidates = sorted(reports_dir.glob("relevant-rrs-*.json"))
+    if not candidates:
+        return []
+    try:
+        return json.loads(candidates[-1].read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        LOGGER.warning("Could not read relevant RRs from %s: %s", candidates[-1], exc)
+        return []
+
+
+def generate_report() -> int:
+    """Produce the SPP Market Changes Summary HTML from the latest local CUF/SUF."""
+    config = load_config()
+    ensure_runtime_dirs(config)
+    setup_logging(config.logs_dir, config.logging_level)
+    warnings: list[str] = []
+
+    cuf = latest_cuf_edition(config.cuf_dir, config.sharepoint_sync_root, config.sharepoint_base_url)
+    suf = latest_suf_edition(config.suf_dir, config.sharepoint_sync_root, config.sharepoint_base_url)
+    if not cuf and not suf:
+        raise RuntimeError("No CUF or SUF materials found in the synced SharePoint folders")
+
+    documents: list[DocumentText] = []
+    cuf_label = suf_label = "not found"
+    if cuf:
+        cuf_label = f"{cuf.label} ({cuf.meeting_date_label})"
+        documents.extend(_edition_documents(cuf, warnings))
+        LOGGER.info("Latest CUF edition: %s (%d files)", cuf.label, len(cuf.files))
+    if suf:
+        suf_label = f"{suf.label} ({suf.meeting_date_label})"
+        documents.extend(_edition_documents(suf, warnings))
+        LOGGER.info("Latest SUF edition: %s (%d files)", suf.label, len(suf.files))
+
+    engine = build_engine(config.report_engine, binary=config.claude_code_binary, model=config.report_model)
+    report = build_report(
+        engine=engine,
+        cuf_label=cuf_label,
+        suf_label=suf_label,
+        documents=documents,
+        relevant_rrs=_load_latest_relevant_rrs(config.reports_dir),
+        generated=datetime.now().strftime("%B %d, %Y"),
+    )
+    html = render_report(report)
+
+    run_id = datetime.now().strftime("%Y%m%d-%H%M%S")
+    html_path = config.reports_dir / f"SPP_Market_Changes_Summary-{run_id}.html"
+    html_path.write_text(html, encoding="utf-8")
+    LOGGER.info("Report written: %s", html_path)
+    for warning in warnings:
+        LOGGER.warning(warning)
+    return 0
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="SPP RR automation")
     subparsers = parser.add_subparsers(dest="command", required=True)
     run_parser = subparsers.add_parser("run", help="Run the automation")
     run_parser.add_argument("--dry-run", action="store_true", help="Discover documents without downloading or storing files")
+    subparsers.add_parser("report", help="Generate the SPP Market Changes Summary HTML from the latest local CUF/SUF")
     return parser.parse_args()
 
 
@@ -436,6 +539,8 @@ def main() -> int:
     args = parse_args()
     if args.command == "run":
         return run(dry_run=args.dry_run)
+    if args.command == "report":
+        return generate_report()
     raise ValueError(f"Unsupported command: {args.command}")
 
 

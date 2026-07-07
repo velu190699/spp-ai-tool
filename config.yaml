@@ -1,12 +1,30 @@
 paths:
-  cuf_dir: "C:/Users/eoyarce/PCI Energy Solutions/Market Systems - ISO Agent Market Updates/SPPIM/CUF"
-  suf_dir: "C:/Users/eoyarce/PCI Energy Solutions/Market Systems - ISO Agent Market Updates/SPPIM/SUF"
-  protocols_dir: "C:/Users/eoyarce/PCI Energy Solutions/Market Systems - ISO Agent Market Updates/SPPIM/Protocols"
-  recommendation_reports_dir: "C:/Users/eoyarce/PCI Energy Solutions/Market Systems - ISO Agent Market Updates/SPPIM/Recommendation_Reports"
-  rr_master_list_dir: "C:/Users/eoyarce/PCI Energy Solutions/Market Systems - ISO Agent Market Updates/SPPIM/RR_Master_List"
+  cuf_dir: "C:/Users/lcarrion/OneDrive - PCI Energy Solutions/Market Systems - ISO Agent Market Updates/SPPIM/CUF"
+  suf_dir: "C:/Users/lcarrion/OneDrive - PCI Energy Solutions/Market Systems - ISO Agent Market Updates/SPPIM/SUF"
+  protocols_dir: "C:/Users/lcarrion/OneDrive - PCI Energy Solutions/Market Systems - ISO Agent Market Updates/SPPIM/Protocols"
+  recommendation_reports_dir: "C:/Users/lcarrion/OneDrive - PCI Energy Solutions/Market Systems - ISO Agent Market Updates/SPPIM/Recommendation_Reports"
+  rr_master_list_dir: "C:/Users/lcarrion/OneDrive - PCI Energy Solutions/Market Systems - ISO Agent Market Updates/SPPIM/RR_Master_List"
   state_file: data/state/metadata.json
   reports_dir: data/reports
   logs_dir: logs
- 
+
+# Maps a local synced SharePoint path to its web URL for report citations.
+# sync_root is the local folder that corresponds to base_url on the web.
+sharepoint:
+  # base_url must match what sync_root maps to on the web. The local library
+  # "Market Systems - ISO Agent Market Updates" is served at
+  # "Shared Documents/ISO Agent Market Updates", so that segment is appended here.
+  base_url: "https://mypci.sharepoint.com/pciteams/marketsys/Shared Documents/ISO Agent Market Updates"
+  sync_root: "C:/Users/lcarrion/OneDrive - PCI Energy Solutions/Market Systems - ISO Agent Market Updates"
+
+report:
+  # Summarization engine: "claude_code" (headless CLI, reuses your login) or "stub".
+  engine: "claude_code"
+  # Optional explicit path to claude.exe. If blank, the newest VSCode extension
+  # build is auto-discovered.
+  claude_code_binary: ""
+  # Model passed to the headless CLI (blank = CLI default).
+  model: ""
+
 logging:
   level: INFO
