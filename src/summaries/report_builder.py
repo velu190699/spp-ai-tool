@@ -152,6 +152,8 @@ def build_report(
     documents: list[DocumentText],
     relevant_rrs: list[dict[str, Any]],
     generated: str,
+    cuf_url: str = "",
+    suf_url: str = "",
 ) -> ReportData:
     instruction = build_instruction()
     context = build_context(
@@ -172,5 +174,9 @@ def build_report(
         meta["cuf_date"] = cuf_label
     if not meta.get("suf_date"):
         meta["suf_date"] = suf_label
+    # Edition links are resolved deterministically from the local files, not the
+    # engine — always authoritative, so overwrite any engine-supplied value.
+    meta["cuf_url"] = cuf_url
+    meta["suf_url"] = suf_url
     LOGGER.debug("Engine payload: %s", json.dumps(raw)[:2000])
     return ReportData.from_dict(raw)

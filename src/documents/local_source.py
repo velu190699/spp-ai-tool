@@ -11,9 +11,18 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 LOGGER = logging.getLogger(__name__)
+
+# SharePoint short-link type letters, keyed by file extension. These pick the
+# right in-browser viewer; "b" (PDF/generic) is a safe default for anything else.
+_LINK_TYPE_BY_EXT = {
+    ".pdf": "b",
+    ".doc": "w", ".docx": "w",
+    ".xls": "x", ".xlsx": "x", ".xlsm": "x", ".csv": "x",
+    ".ppt": "p", ".pptx": "p",
+}
 
 # Folder/file names embed dates as YYYYMMDD, e.g.
 # "CUF Meeting Materials 20260618_20260612" (meeting date first, publish second)
@@ -33,6 +42,7 @@ class SourceEdition:
     kind: str  # "CUF" or "SUF"
     label: str  # the folder/file name that identifies the edition
     meeting_date: datetime | None
+    url: str = ""  # SharePoint URL for the edition itself (CUF folder / SUF pdf)
     files: list[SourceFile] = field(default_factory=list)
 
     @property
@@ -51,11 +61,16 @@ def meeting_date_from_name(name: str) -> datetime | None:
         return None
 
 
-def to_sharepoint_url(local_path: Path, sync_root: Path, base_url: str) -> str:
-    """Map a local synced path to its SharePoint web URL.
+def to_sharepoint_url(local_path: Path, sync_root: Path, base_url: str, *, is_folder: bool = False) -> str:
+    """Map a local synced path to a clickable SharePoint web URL.
 
-    The path relative to sync_root is appended to base_url, with each segment
-    URL-encoded (spaces become %20) so the link is valid and clickable.
+    Raw library paths (base_url + relative path) do not reliably resolve — folders
+    in particular 404. SharePoint navigates via a short redirect link off the tenant
+    root instead: ``https://<host>/:<type>:/r/<server-relative path>?csf=1&web=1``,
+    where <type> is ``f`` for a folder or a viewer letter for a file (``b`` PDF,
+    ``w`` Word, ``x`` Excel, ``p`` PowerPoint). base_url supplies the host and the
+    server-relative base (its path), to which the path relative to sync_root is
+    appended. Each segment is URL-encoded (spaces -> %20); slashes stay literal.
     """
     if not base_url:
         return ""
@@ -64,8 +79,13 @@ def to_sharepoint_url(local_path: Path, sync_root: Path, base_url: str) -> str:
     except ValueError:
         LOGGER.warning("Path %s is not under sync_root %s; citation URL unavailable", local_path, sync_root)
         return ""
-    encoded = "/".join(quote(part) for part in relative.parts)
-    return f"{base_url}/{encoded}"
+    parsed = urlsplit(base_url)
+    host = f"{parsed.scheme}://{parsed.netloc}"
+    base_segments = [seg for seg in parsed.path.split("/") if seg]
+    segments = base_segments + list(relative.parts)
+    server_relative = "/".join(quote(seg) for seg in segments)
+    link_type = "f" if is_folder else _LINK_TYPE_BY_EXT.get(local_path.suffix.lower(), "b")
+    return f"{host}/:{link_type}:/r/{server_relative}?csf=1&web=1"
 
 
 def _files_in(folder: Path, sync_root: Path, base_url: str) -> list[SourceFile]:
@@ -90,6 +110,7 @@ def latest_cuf_edition(cuf_dir: Path, sync_root: Path, base_url: str) -> SourceE
         kind="CUF",
         label=latest.name,
         meeting_date=meeting_date_from_name(latest.name),
+        url=to_sharepoint_url(latest, sync_root, base_url, is_folder=True),
         files=_files_in(latest, sync_root, base_url),
     )
 
@@ -104,14 +125,16 @@ def latest_suf_edition(suf_dir: Path, sync_root: Path, base_url: str) -> SourceE
         LOGGER.warning("No SUF PDFs under %s", suf_dir)
         return None
     latest = max(pdfs, key=lambda p: (meeting_date_from_name(p.name) or datetime.min, p.name))
+    suf_url = to_sharepoint_url(latest, sync_root, base_url)
     return SourceEdition(
         kind="SUF",
         label=latest.name,
         meeting_date=meeting_date_from_name(latest.name),
+        url=suf_url,
         files=[
             SourceFile(
                 local_path=latest,
-                sharepoint_url=to_sharepoint_url(latest, sync_root, base_url),
+                sharepoint_url=suf_url,
                 filename=latest.name,
             )
         ],

@@ -6,6 +6,8 @@ paths:
   rr_master_list_dir: "C:/Users/lcarrion/OneDrive - PCI Energy Solutions/Market Systems - ISO Agent Market Updates/SPPIM/RR_Master_List"
   state_file: data/state/metadata.json
   reports_dir: data/reports
+  # Final HTML report is published here (synced SharePoint "Reports" folder).
+  published_reports_dir: "C:/Users/lcarrion/OneDrive - PCI Energy Solutions/Market Systems - ISO Agent Market Updates/Reports"
   logs_dir: logs
 
 # Maps a local synced SharePoint path to its web URL for report citations.
@@ -25,6 +27,16 @@ report:
   claude_code_binary: ""
   # Model passed to the headless CLI (blank = CLI default).
   model: ""
+
+slack:
+  # Two delivery options — configure ONE. Leave secrets blank here and set them
+  # in .env (gitignored). A bot token + channel takes precedence over the webhook.
+  #  A) Incoming Webhook URL (posts to the channel it's bound to): SLACK_WEBHOOK_URL
+  webhook_url: ""
+  #  B) Bot token (xoxb-…, chat:write scope) + target channel (#name or ID):
+  #     SLACK_BOT_TOKEN / SLACK_CHANNEL
+  bot_token: ""
+  channel: ""
 
 logging:
   level: INFO

@@ -119,7 +119,13 @@ _TEMPLATE = """<!DOCTYPE html>
     <div class="sub">What's changing in the SPPIM market this cycle &mdash; for all PCI teams</div>
     <div class="meta">
       <span><b>Generated:</b> {{ meta.generated }}</span>
-      <span><b>Sources:</b> {{ meta.sources_line }}</span>
+      <span><b>Sources:</b>
+        {%- if meta.cuf_url or meta.suf_url %}
+          {%- if meta.cuf_url %} <a href="{{ meta.cuf_url }}">CUF{% if meta.cuf_date %} {{ meta.cuf_date }}{% endif %}</a>{% elif meta.cuf_date %} CUF {{ meta.cuf_date }}{% endif %}
+          {%- if (meta.cuf_url or meta.cuf_date) and (meta.suf_url or meta.suf_date) %} &middot;{% endif %}
+          {%- if meta.suf_url %} <a href="{{ meta.suf_url }}">SUF{% if meta.suf_date %} {{ meta.suf_date }}{% endif %}</a>{% elif meta.suf_date %} SUF {{ meta.suf_date }}{% endif %}
+        {%- else %} {{ meta.sources_line }}{% endif %}
+      </span>
     </div>
   </header>
 

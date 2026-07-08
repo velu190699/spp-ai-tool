@@ -112,6 +112,8 @@ class NarrativeSection:
 class ReportMeta:
     cuf_date: str = ""
     suf_date: str = ""
+    cuf_url: str = ""  # SharePoint link to the CUF meeting folder
+    suf_url: str = ""  # SharePoint link to the SUF pdf
     generated: str = ""
     sources_line: str = ""
     files_read: list[str] = field(default_factory=list)
@@ -122,6 +124,8 @@ class ReportMeta:
         return cls(
             cuf_date=str(raw.get("cuf_date", "")).strip(),
             suf_date=str(raw.get("suf_date", "")).strip(),
+            cuf_url=str(raw.get("cuf_url", "")).strip(),
+            suf_url=str(raw.get("suf_url", "")).strip(),
             generated=str(raw.get("generated", "")).strip(),
             sources_line=str(raw.get("sources_line", "")).strip(),
             files_read=[str(f) for f in raw.get("files_read", [])],

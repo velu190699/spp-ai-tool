@@ -18,11 +18,16 @@ from config import (
 from src.browser.download_utils import sha256_file
 from src.browser.spp_client import SppClient, SppDocument, rr_search_query_from_url
 from src.documents.excel_parser import RRRecord, read_open_rrs
-from src.documents.local_source import SourceEdition, latest_cuf_edition, latest_suf_edition
+from src.documents.local_source import (
+    SourceEdition,
+    latest_cuf_edition,
+    latest_suf_edition,
+    to_sharepoint_url,
+)
 from src.documents.pdf_parser import parse_pdf
 from src.documents.rr_extractor import merge_mentions
 from src.documents.zip_utils import extract_first_recommendation_report, extract_pdfs
-from src.notifications.notifier import log_slack_draft
+from src.notifications.notifier import log_slack_draft, send_slack_report_link
 from src.state.metadata_store import MetadataStore
 from src.summaries.html_renderer import render_report
 from src.summaries.report_builder import DocumentText, build_report
@@ -497,12 +502,15 @@ def generate_report() -> int:
 
     documents: list[DocumentText] = []
     cuf_label = suf_label = "not found"
+    cuf_url = suf_url = ""
     if cuf:
         cuf_label = f"{cuf.label} ({cuf.meeting_date_label})"
+        cuf_url = cuf.url
         documents.extend(_edition_documents(cuf, warnings))
         LOGGER.info("Latest CUF edition: %s (%d files)", cuf.label, len(cuf.files))
     if suf:
         suf_label = f"{suf.label} ({suf.meeting_date_label})"
+        suf_url = suf.url
         documents.extend(_edition_documents(suf, warnings))
         LOGGER.info("Latest SUF edition: %s (%d files)", suf.label, len(suf.files))
 
@@ -514,13 +522,28 @@ def generate_report() -> int:
         documents=documents,
         relevant_rrs=_load_latest_relevant_rrs(config.reports_dir),
         generated=datetime.now().strftime("%B %d, %Y"),
+        cuf_url=cuf_url,
+        suf_url=suf_url,
     )
     html = render_report(report)
 
     run_id = datetime.now().strftime("%Y%m%d-%H%M%S")
-    html_path = config.reports_dir / f"SPP_Market_Changes_Summary-{run_id}.html"
+    html_path = config.published_reports_dir / f"SPP_Market_Changes_Summary-{run_id}.html"
     html_path.write_text(html, encoding="utf-8")
     LOGGER.info("Report written: %s", html_path)
+
+    # Announce the published report in Slack. The HTML lives in the synced
+    # SharePoint "Reports" library, so map its local path back to a web link.
+    report_url = to_sharepoint_url(html_path, config.sharepoint_sync_root, config.sharepoint_base_url)
+    report_title = f"SPP Market Changes Summary — {datetime.now().strftime('%B %d, %Y')}"
+    send_slack_report_link(
+        report_title,
+        report_url,
+        webhook_url=config.slack_webhook_url,
+        bot_token=config.slack_bot_token,
+        channel=config.slack_channel,
+    )
+
     for warning in warnings:
         LOGGER.warning(warning)
     return 0

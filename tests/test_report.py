@@ -72,3 +72,37 @@ def test_build_report_end_to_end_with_stub():
         assert code in html
     # Clean UTF-8, no mojibake artifacts from the sample.
     assert "Â·" not in html
+
+
+def test_header_links_cuf_folder_and_suf_pdf():
+    report = build_report(
+        engine=StubEngine(),
+        cuf_label="CUF X (June 18, 2026)",
+        suf_label="SUF Y (April 9, 2026)",
+        documents=[DocumentText(kind="CUF", filename="a.pdf", sharepoint_url="u", text="text")],
+        relevant_rrs=[],
+        generated="July 1, 2026",
+        cuf_url="https://sp/CUF%20folder",
+        suf_url="https://sp/SUF%20file.pdf",
+    )
+    # Engine-supplied edition links are overwritten by the deterministic ones.
+    assert report.meta.cuf_url == "https://sp/CUF%20folder"
+    assert report.meta.suf_url == "https://sp/SUF%20file.pdf"
+    html = render_report(report)
+    assert '<a href="https://sp/CUF%20folder">CUF' in html
+    assert '<a href="https://sp/SUF%20file.pdf">SUF' in html
+
+
+def test_header_falls_back_to_plain_sources_without_urls():
+    report = build_report(
+        engine=StubEngine(),
+        cuf_label="CUF X (June 18, 2026)",
+        suf_label="SUF Y (April 9, 2026)",
+        documents=[DocumentText(kind="CUF", filename="a.pdf", sharepoint_url="u", text="text")],
+        relevant_rrs=[],
+        generated="July 1, 2026",
+    )
+    assert report.meta.cuf_url == ""
+    html = render_report(report)
+    # No edition anchors when URLs are unavailable; sources_line still shows.
+    assert 'href="https://sp' not in html

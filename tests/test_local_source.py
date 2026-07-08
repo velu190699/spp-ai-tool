@@ -13,7 +13,7 @@ def test_meeting_date_uses_first_yyyymmdd_token():
     assert meeting_date_from_name("no date here") is None
 
 
-def test_to_sharepoint_url_maps_relative_path(tmp_path):
+def test_to_sharepoint_url_builds_file_redirect_link(tmp_path):
     sync_root = tmp_path / "sync"
     sub = sync_root / "SPPIM" / "CUF" / "CUF Meeting Materials 20260618"
     sub.mkdir(parents=True)
@@ -21,7 +21,24 @@ def test_to_sharepoint_url_maps_relative_path(tmp_path):
     local.write_text("x", encoding="utf-8")
 
     url = to_sharepoint_url(local, sync_root, "https://mypci.sharepoint.com/base")
-    assert url == "https://mypci.sharepoint.com/base/SPPIM/CUF/CUF%20Meeting%20Materials%2020260618/%2807%29%20Markets%20Releases.pdf"
+    # PDF -> ":b:" viewer link off the tenant root, spaces encoded, slashes literal.
+    assert url == (
+        "https://mypci.sharepoint.com/:b:/r/base/SPPIM/CUF/"
+        "CUF%20Meeting%20Materials%2020260618/%2807%29%20Markets%20Releases.pdf?csf=1&web=1"
+    )
+
+
+def test_to_sharepoint_url_builds_folder_redirect_link(tmp_path):
+    sync_root = tmp_path / "sync"
+    folder = sync_root / "SPPIM" / "CUF" / "CUF Meeting Materials 20260618_20260612"
+    folder.mkdir(parents=True)
+
+    url = to_sharepoint_url(folder, sync_root, "https://mypci.sharepoint.com/base", is_folder=True)
+    # Folder -> ":f:" link, which redirects to the library's folder view.
+    assert url == (
+        "https://mypci.sharepoint.com/:f:/r/base/SPPIM/CUF/"
+        "CUF%20Meeting%20Materials%2020260618_20260612?csf=1&web=1"
+    )
 
 
 def test_to_sharepoint_url_outside_root_returns_empty(tmp_path):
