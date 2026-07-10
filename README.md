@@ -27,19 +27,23 @@ Integrated Marketplace Protocol is handled as a source archive only in v1. Its r
 
 ## Credentials and Environment Variables
 
-No credentials are required for v1.
+No credentials are required for `run` or `report` — both read from a locally
+synced SharePoint/OneDrive folder.
 
-`.env.example` documents pending future variables:
+`.env.example` documents:
 
-- `SHAREPOINT_TENANT_ID`
-- `SHAREPOINT_CLIENT_ID`
-- `SHAREPOINT_CLIENT_SECRET`
-- `SHAREPOINT_SITE_ID`
-- `SHAREPOINT_DRIVE_ID`
-- `SLACK_WEBHOOK_URL`
-- `SLACK_CHANNEL`
+- `SHAREPOINT_TENANT_ID` / `SHAREPOINT_CLIENT_ID` / `SHAREPOINT_CLIENT_SECRET` —
+  only needed for `python main.py settlement-report --links ...` (live
+  Microsoft Graph download of RR `.docx` files from SharePoint share links).
+  Requires an Azure app registration with the `Sites.Read.All` application
+  permission. Not needed for `--files` mode.
+- `SHAREPOINT_SITE_ID` / `SHAREPOINT_DRIVE_ID` — reserved for future direct
+  drive addressing; unused by the current share-link resolution flow.
+- `SLACK_WEBHOOK_URL` / `SLACK_BOT_TOKEN` / `SLACK_CHANNEL`
 
-Real SharePoint auth remains pending in this README because the expected Microsoft Graph auth mode has not been selected.
+Real SharePoint upload for `run`'s own outputs remains pending in this README
+because the expected Microsoft Graph auth mode for that flow has not been
+selected.
 
 ## Install
 
@@ -71,6 +75,12 @@ Generate the SPP Market Changes Summary HTML report (on demand):
 python main.py report
 ```
 
+Generate the SPP RR → Jira Settlement Excel report (on demand):
+
+```bash
+python main.py settlement-report --call-claude
+```
+
 ## Market Changes Summary Report
 
 `python main.py report` produces a self-contained, two-tab HTML report
@@ -95,6 +105,50 @@ The engine only ever emits structured JSON (validated against the contract in
 (`src/summaries/html_renderer.py`), so output is consistent across runs.
 
 Runtime configuration lives in `config.yaml` for local paths and logging. SPP search terms and matching rules are hardcoded in `config.py` and `main.py` by design for v1.
+
+## SPP RR → Jira Settlement Report
+
+`python main.py settlement-report` produces `SPP_RR_Report_Summary-<timestamp>.xlsx`,
+a Jira-intake artifact for the **settlement development team** — a different
+audience from the Market Changes Summary above, which briefs all PCI teams.
+Each RR is triaged, and only RRs that actually change a settlement charge code
+get development stories; everything else is routed to a human reviewer instead
+of being silently dropped.
+
+- **Source**: by default, every `.docx` already downloaded into
+  `recommendation_reports_dir` by `python main.py run`. Pass `--files a.docx b.docx`
+  to target specific local files, or `--links links.txt` (one SharePoint share
+  URL per line) to download directly via Microsoft Graph — see
+  [Credentials and Environment Variables](#credentials-and-environment-variables).
+- **Extraction** (`src/settlement/rr_structure.py`): reads `word/document.xml`
+  directly (not flattened text) so headings, tracked-change redlines
+  (`{{INS}}`/`{{DEL}}`), and equations survive. Classifies each RR as
+  `SETTLEMENT_CALC` (has charge-code determinants — extract stories),
+  `SETTLEMENT_RELEVANT` (settlement impact stated only in Tariff prose — needs
+  a human to author the story), or `TARIFF_GOVERNANCE` (out of scope). A
+  **hard-fail reconciliation gate** compares the RR's own "Impacted SPP
+  Documents" checklist against what was actually found in the body; any gap
+  stops that RR for manual review rather than silently under-reporting.
+- **Story generation** (`--call-claude`): for `SETTLEMENT_CALC` + `PASS` RRs
+  only, reuses the same LLM engine as the Market Changes Summary
+  (`report.engine`/`claude_code_binary`/`model` in `config.yaml`) with a
+  dedicated prompt (`src/settlement/rr_extraction_prompt.md`) that emits one
+  Jira story per charge code, each with a page-anchored citation. Omit the
+  flag for a fast classification-only triage pass.
+- **Output**: `data/reports/settlement/SPP_RR_Report_Summary-<timestamp>.xlsx`
+  (`settlement_reports_dir` in `config.yaml`), with an "RR Summary" sheet (one
+  row per RR) and a "Settlement Stories" sheet (one row per charge type).
+
+To validate extraction on a new RR before trusting it:
+
+```bash
+python -m src.settlement.rr_structure --file "RR900 Recommendation Report.docx" --out-json rr900.json
+```
+
+Check `rr_class` and `reconciliation.status` in the output: `PASS` means trust
+the charge-type index; `HARD_FAIL` means open the RR and compare "Impacted
+Documents" against the sections found — usually a formatting quirk in the
+detector, or a genuinely missing redline.
 
 ## Duplicate Detection
 

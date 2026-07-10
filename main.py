@@ -28,6 +28,7 @@ from src.documents.pdf_parser import parse_pdf
 from src.documents.rr_extractor import merge_mentions
 from src.documents.zip_utils import extract_first_recommendation_report, extract_pdfs
 from src.notifications.notifier import log_slack_draft, send_slack_report_link
+from src.settlement import pipeline as settlement_pipeline
 from src.state.metadata_store import MetadataStore
 from src.summaries.html_renderer import render_report
 from src.summaries.report_builder import DocumentText, build_report
@@ -549,12 +550,67 @@ def generate_report() -> int:
     return 0
 
 
+def generate_settlement_report(
+    *, files: list[str] | None, links: str | None, out: str | None, call_claude: bool
+) -> int:
+    """Produce SPP_RR_Report_Summary.xlsx: RR docx -> charge-type stories for settlement devs.
+
+    Distinct from generate_report() above (the PCI-wide HTML briefing) — this is
+    a Jira-intake artifact for the settlement development team, scoped to RRs
+    that change a charge code. See src/settlement/pipeline.py for the full flow.
+    """
+    config = load_config()
+    ensure_runtime_dirs(config)
+    setup_logging(config.logs_dir, config.logging_level)
+
+    # No --files/--links given: default to whatever main.py run has already
+    # pulled into recommendation_reports_dir (see process_recommendation_reports
+    # above), so the two pipelines can share the same local RR docx cache.
+    if not files and not links:
+        files = [str(p) for p in config.recommendation_reports_dir.rglob("*.docx")]
+        if not files:
+            raise RuntimeError(
+                f"No RR .docx files in {config.recommendation_reports_dir} and no "
+                "--files/--links given. Run `python main.py run` first, or pass one explicitly."
+            )
+        LOGGER.info("Defaulting to %d RR docx file(s) from %s", len(files), config.recommendation_reports_dir)
+
+    run_id = datetime.now().strftime("%Y%m%d-%H%M%S")
+    out_path = out or str(config.settlement_reports_dir / f"SPP_RR_Report_Summary-{run_id}.xlsx")
+
+    engine = build_engine(config.report_engine, binary=config.claude_code_binary, model=config.report_model) if call_claude else None
+    settlement_pipeline.run(
+        files=files,
+        links=settlement_pipeline.read_links_file(links) if links else None,
+        out_path=out_path,
+        engine=engine,
+        tenant=config.sharepoint_tenant_id,
+        client_id=config.sharepoint_client_id,
+        client_secret=config.sharepoint_client_secret,
+    )
+    LOGGER.info("Settlement report written: %s", out_path)
+    return 0
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="SPP RR automation")
     subparsers = parser.add_subparsers(dest="command", required=True)
     run_parser = subparsers.add_parser("run", help="Run the automation")
     run_parser.add_argument("--dry-run", action="store_true", help="Discover documents without downloading or storing files")
     subparsers.add_parser("report", help="Generate the SPP Market Changes Summary HTML from the latest local CUF/SUF")
+
+    settlement_parser = subparsers.add_parser(
+        "settlement-report", help="Generate the SPP RR -> Jira Settlement Excel report"
+    )
+    settlement_parser.add_argument(
+        "--files", nargs="*", help="Local RR .docx paths (default: everything in recommendation_reports_dir)"
+    )
+    settlement_parser.add_argument("--links", help="Path to a text file of SharePoint share URLs, one per line")
+    settlement_parser.add_argument("--out", help="Output .xlsx path (default: settlement_reports_dir/SPP_RR_Report_Summary-<timestamp>.xlsx)")
+    settlement_parser.add_argument(
+        "--call-claude", action="store_true",
+        help="Invoke the LLM to generate Jira stories for SETTLEMENT_CALC + PASS RRs (omit for a classification-only triage pass)",
+    )
     return parser.parse_args()
 
 
@@ -564,6 +620,8 @@ def main() -> int:
         return run(dry_run=args.dry_run)
     if args.command == "report":
         return generate_report()
+    if args.command == "settlement-report":
+        return generate_settlement_report(files=args.files, links=args.links, out=args.out, call_claude=args.call_claude)
     raise ValueError(f"Unsupported command: {args.command}")
 
 

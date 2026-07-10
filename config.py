@@ -34,10 +34,14 @@ class AppConfig:
     state_file: Path
     reports_dir: Path
     published_reports_dir: Path
+    settlement_reports_dir: Path
     logs_dir: Path
     logging_level: str
     sharepoint_base_url: str
     sharepoint_sync_root: Path
+    sharepoint_tenant_id: str
+    sharepoint_client_id: str
+    sharepoint_client_secret: str
     report_engine: str
     claude_code_binary: str
     report_model: str
@@ -67,10 +71,17 @@ def load_config(path: str = "config.yaml") -> AppConfig:
         # runs without this key keep their old behavior; set it to the synced
         # SharePoint "Reports" folder to publish there.
         published_reports_dir=Path(paths.get("published_reports_dir", paths.get("reports_dir", "data/reports"))),
+        settlement_reports_dir=Path(paths.get("settlement_reports_dir", "data/reports/settlement")),
         logs_dir=Path(paths.get("logs_dir", "logs")),
         logging_level=str(logging.get("level", "INFO")).upper(),
         sharepoint_base_url=str(sharepoint.get("base_url", "")).rstrip("/"),
         sharepoint_sync_root=Path(sharepoint.get("sync_root", "")),
+        # Microsoft Graph credentials for the RR settlement pipeline's --links
+        # mode (live SharePoint share-link download). Secrets only, no
+        # config.yaml fallback — set them in .env, same as Slack's tokens.
+        sharepoint_tenant_id=os.getenv("SHAREPOINT_TENANT_ID", "").strip(),
+        sharepoint_client_id=os.getenv("SHAREPOINT_CLIENT_ID", "").strip(),
+        sharepoint_client_secret=os.getenv("SHAREPOINT_CLIENT_SECRET", "").strip(),
         report_engine=str(report.get("engine", "claude_code")),
         claude_code_binary=str(report.get("claude_code_binary", "")),
         report_model=str(report.get("model", "")),
@@ -93,6 +104,7 @@ def ensure_runtime_dirs(config: AppConfig) -> None:
         config.state_file.parent,
         config.reports_dir,
         config.published_reports_dir,
+        config.settlement_reports_dir,
         config.logs_dir,
     ):
         directory.mkdir(parents=True, exist_ok=True)
