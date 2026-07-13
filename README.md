@@ -2,7 +2,7 @@
 
 Minimal Python automation for collecting the latest SPP regulatory materials, identifying open and relevant Revision Requests (RRs), retaining new source files once, mirroring processed outputs to a local SharePoint-like folder, and logging a Slack-oriented notification draft.
 
-V1 is intentionally stub-first. Real SharePoint upload, PCI stakeholder routing, and real Slack delivery are pending integration decisions.
+Slack delivery (Incoming Webhook or bot token) is implemented. Real SharePoint upload of `run`'s own outputs and per-PCI-area stakeholder routing remain pending integration decisions.
 
 ## What It Does
 
@@ -21,7 +21,7 @@ The automation:
 7. Extracts RR mentions and all nearby dates from CUF/SUF text.
 8. Intersects mentioned RRs with open RRs from the master list.
 9. Downloads the package for each relevant RR and keeps only the first exact file named `RR <number> Recommendation Report.docx`.
-10. Logs a Slack-style notification draft and writes JSON run outputs.
+10. Writes JSON run outputs and, when something changed, publishes the Market Changes Summary HTML and posts it to Slack (link + relevant RR list).
 
 Integrated Marketplace Protocol is handled as a source archive only in v1. Its raw ZIP is retained locally forever, and its contents are not parsed or summarized.
 
@@ -178,7 +178,22 @@ V1 summary generation is structured extraction only:
 
 No LLM prose summary, PCI division/market mapping, or stakeholder routing is attempted in v1.
 
-The notification module formats and logs a Slack-oriented draft. Real Slack sending is pending and should be added after stakeholder routing and channel/webhook ownership are defined.
+Slack delivery is implemented. Both `run` (automatically, only when CUF/SUF/RR
+Master List changed) and `report` (on every invocation) publish the Market
+Changes Summary HTML to the synced SharePoint `Reports` folder and post a
+Block Kit message to Slack with a clickable link to that report plus the list
+of relevant open RRs (each linked to its SPP search).
+
+Configure delivery with either option in `.env` (see `.env.example`); a bot
+token takes precedence over the webhook when both are set:
+
+- **Incoming Webhook**: `SLACK_WEBHOOK_URL` (posts to the channel the webhook is
+  bound to).
+- **Bot token**: `SLACK_BOT_TOKEN` (needs the `chat:write` scope, and the bot
+  must be invited to the channel) + `SLACK_CHANNEL` (a `#name` or channel ID).
+
+If neither is configured, the run still succeeds and only logs the draft.
+Stakeholder routing (per-PCI-area targeting) remains pending.
 
 ## Outputs
 

@@ -423,6 +423,14 @@ def run(dry_run: bool) -> int:
     discovered["recommendation_reports"] = reports
 
     log_slack_draft(relevant_rrs, warnings)
+
+    # Connect the automated flow to Slack. The manual `report` command notifies
+    # too, but `run` is the unattended path, so it publishes the HTML report and
+    # posts it (with the RR list) whenever something changed — no ping on a
+    # no-op run. Skipped on dry runs.
+    if not dry_run and (any_change or relevant_rrs):
+        notify_slack_report(config, warnings, run_id, relevant_rrs)
+
     run_summary = build_run_summary(
         run_id=run_id,
         dry_run=dry_run,
@@ -489,17 +497,25 @@ def _load_latest_relevant_rrs(reports_dir: Path) -> list[dict[str, Any]]:
         return []
 
 
-def generate_report() -> int:
-    """Produce the SPP Market Changes Summary HTML from the latest local CUF/SUF."""
-    config = load_config()
-    ensure_runtime_dirs(config)
-    setup_logging(config.logs_dir, config.logging_level)
-    warnings: list[str] = []
+def build_market_changes_html(
+    config,
+    warnings: list[str],
+    run_id: str,
+    relevant_rrs: list[dict[str, Any]],
+) -> tuple[Path | None, str]:
+    """Build the SPP Market Changes Summary HTML and publish it.
 
+    Reads the latest local CUF/SUF materials, renders the report, writes it to
+    ``published_reports_dir`` (the synced SharePoint "Reports" library), and
+    returns ``(html_path, sharepoint_url)``. Returns ``(None, "")`` when no CUF
+    or SUF materials are available, appending a warning instead of raising, so
+    the automated ``run`` flow can still notify without a report.
+    """
     cuf = latest_cuf_edition(config.cuf_dir, config.sharepoint_sync_root, config.sharepoint_base_url)
     suf = latest_suf_edition(config.suf_dir, config.sharepoint_sync_root, config.sharepoint_base_url)
     if not cuf and not suf:
-        raise RuntimeError("No CUF or SUF materials found in the synced SharePoint folders")
+        warnings.append("No CUF or SUF materials found in the synced SharePoint folders; skipping HTML report")
+        return None, ""
 
     documents: list[DocumentText] = []
     cuf_label = suf_label = "not found"
@@ -521,21 +537,41 @@ def generate_report() -> int:
         cuf_label=cuf_label,
         suf_label=suf_label,
         documents=documents,
-        relevant_rrs=_load_latest_relevant_rrs(config.reports_dir),
+        relevant_rrs=relevant_rrs,
         generated=datetime.now().strftime("%B %d, %Y"),
         cuf_url=cuf_url,
         suf_url=suf_url,
     )
     html = render_report(report)
 
-    run_id = datetime.now().strftime("%Y%m%d-%H%M%S")
     html_path = config.published_reports_dir / f"SPP_Market_Changes_Summary-{run_id}.html"
     html_path.write_text(html, encoding="utf-8")
     LOGGER.info("Report written: %s", html_path)
 
-    # Announce the published report in Slack. The HTML lives in the synced
-    # SharePoint "Reports" library, so map its local path back to a web link.
+    # The HTML lives in the synced SharePoint "Reports" library, so map its local
+    # path back to a clickable web link for the Slack notification.
     report_url = to_sharepoint_url(html_path, config.sharepoint_sync_root, config.sharepoint_base_url)
+    return html_path, report_url
+
+
+def notify_slack_report(config, warnings: list[str], run_id: str, relevant_rrs: list[dict[str, Any]]) -> None:
+    """Build+publish the HTML report and post it to Slack with the RR list.
+
+    Report generation must never sink the surrounding command, so a build
+    failure is logged and turned into a warning; the channel is still notified
+    (with the RR list and no link) so a failed report doesn't go unnoticed.
+    """
+    report_url = ""
+    note = ""
+    try:
+        html_path, report_url = build_market_changes_html(config, warnings, run_id, relevant_rrs)
+        if html_path is None:
+            # No CUF/SUF materials — build_market_changes_html already warned.
+            note = "No CUF/SUF materials available; report not generated."
+    except Exception as exc:  # report build must not crash the caller
+        LOGGER.exception("Failed to build the HTML report for the Slack notification")
+        warnings.append(f"HTML report generation failed: {exc}")
+        note = "Report generation failed; see the run log for details."
     report_title = f"SPP Market Changes Summary — {datetime.now().strftime('%B %d, %Y')}"
     send_slack_report_link(
         report_title,
@@ -543,6 +579,33 @@ def generate_report() -> int:
         webhook_url=config.slack_webhook_url,
         bot_token=config.slack_bot_token,
         channel=config.slack_channel,
+        relevant_rrs=relevant_rrs,
+        note=note,
+    )
+
+
+def generate_report() -> int:
+    """Produce the SPP Market Changes Summary HTML from the latest local CUF/SUF."""
+    config = load_config()
+    ensure_runtime_dirs(config)
+    setup_logging(config.logs_dir, config.logging_level)
+    warnings: list[str] = []
+
+    run_id = datetime.now().strftime("%Y%m%d-%H%M%S")
+    relevant_rrs = _load_latest_relevant_rrs(config.reports_dir)
+    html_path, report_url = build_market_changes_html(config, warnings, run_id, relevant_rrs)
+    if html_path is None:
+        raise RuntimeError("No CUF or SUF materials found in the synced SharePoint folders")
+
+    # Announce the published report in Slack, including the relevant RR list.
+    report_title = f"SPP Market Changes Summary — {datetime.now().strftime('%B %d, %Y')}"
+    send_slack_report_link(
+        report_title,
+        report_url,
+        webhook_url=config.slack_webhook_url,
+        bot_token=config.slack_bot_token,
+        channel=config.slack_channel,
+        relevant_rrs=relevant_rrs,
     )
 
     for warning in warnings:
