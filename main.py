@@ -405,12 +405,15 @@ def run(dry_run: bool) -> int:
                         if item not in entry[key]:
                             entry[key].append(item)
 
-    # Only build relevant RRs if something changed — otherwise use last known state
+    # Only build relevant RRs if something changed — otherwise carry forward the
+    # last known state. A no-change run must not clear the list: the materials
+    # are identical to last time, so the relevant RRs are too. Writing [] here
+    # would overwrite the real list and leave `report` with nothing to show.
     if any_change or dry_run:
         relevant_rrs = build_relevant_rrs(open_rrs, mentioned)
     else:
-        LOGGER.info("No changes detected — skipping RR cross and report download")
-        relevant_rrs = []
+        LOGGER.info("No changes detected — reusing last known relevant RRs")
+        relevant_rrs = _load_latest_relevant_rrs(config.reports_dir)
     reports = [] if dry_run else process_recommendation_reports(
         relevant_rrs=relevant_rrs,
         client=client,
@@ -486,15 +489,22 @@ def _edition_documents(edition: SourceEdition, warnings: list[str]) -> list[Docu
 
 
 def _load_latest_relevant_rrs(reports_dir: Path) -> list[dict[str, Any]]:
-    """Best-effort: reuse the most recent relevant-rrs JSON to enrich the report."""
-    candidates = sorted(reports_dir.glob("relevant-rrs-*.json"))
-    if not candidates:
-        return []
-    try:
-        return json.loads(candidates[-1].read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        LOGGER.warning("Could not read relevant RRs from %s: %s", candidates[-1], exc)
-        return []
+    """Reuse the most recent NON-EMPTY relevant-rrs JSON to enrich the report.
+
+    A `run` that detects no changes writes an empty list (it skips the RR cross),
+    so the newest file is often `[]`. That empty file means "nothing recomputed",
+    not "confirmed zero relevant RRs" — so walk newest→oldest and return the
+    first file that actually has RRs, falling back to [] only if none ever did.
+    """
+    for candidate in sorted(reports_dir.glob("relevant-rrs-*.json"), reverse=True):
+        try:
+            data = json.loads(candidate.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            LOGGER.warning("Could not read relevant RRs from %s: %s", candidate, exc)
+            continue
+        if data:
+            return data
+    return []
 
 
 def build_market_changes_html(

@@ -50,6 +50,16 @@ class AppConfig:
     slack_channel: str
 
 
+def _expand_path(value: str) -> Path:
+    """Expand ${ENV_VAR}/%VAR% and ~ in a configured path, then make a Path.
+
+    Lets config.yaml stay machine-agnostic: instead of hard-coding a per-user
+    absolute path (which two teammates would keep overwriting for each other),
+    it can reference ${SPP_SYNC_ROOT}, defined in each person's local .env.
+    """
+    return Path(os.path.expanduser(os.path.expandvars(str(value))))
+
+
 def load_config(path: str = "config.yaml") -> AppConfig:
     with open(path, "r", encoding="utf-8") as handle:
         raw: Dict[str, Any] = yaml.safe_load(handle) or {}
@@ -60,22 +70,22 @@ def load_config(path: str = "config.yaml") -> AppConfig:
     report = raw.get("report", {})
     slack = raw.get("slack", {})
     return AppConfig(
-        cuf_dir=Path(paths.get("cuf_dir", "data/CUF")),
-        suf_dir=Path(paths.get("suf_dir", "data/SUF")),
-        protocols_dir=Path(paths.get("protocols_dir", "data/Protocols")),
-        recommendation_reports_dir=Path(paths.get("recommendation_reports_dir", "data/Recommendation_Reports")),
-        rr_master_list_dir=Path(paths.get("rr_master_list_dir", "data/RR_Master_List")),
-        state_file=Path(paths.get("state_file", "data/state/metadata.json")),
-        reports_dir=Path(paths.get("reports_dir", "data/reports")),
+        cuf_dir=_expand_path(paths.get("cuf_dir", "data/CUF")),
+        suf_dir=_expand_path(paths.get("suf_dir", "data/SUF")),
+        protocols_dir=_expand_path(paths.get("protocols_dir", "data/Protocols")),
+        recommendation_reports_dir=_expand_path(paths.get("recommendation_reports_dir", "data/Recommendation_Reports")),
+        rr_master_list_dir=_expand_path(paths.get("rr_master_list_dir", "data/RR_Master_List")),
+        state_file=_expand_path(paths.get("state_file", "data/state/metadata.json")),
+        reports_dir=_expand_path(paths.get("reports_dir", "data/reports")),
         # Where the final HTML report is published. Defaults to reports_dir so
         # runs without this key keep their old behavior; set it to the synced
         # SharePoint "Reports" folder to publish there.
-        published_reports_dir=Path(paths.get("published_reports_dir", paths.get("reports_dir", "data/reports"))),
-        settlement_reports_dir=Path(paths.get("settlement_reports_dir", "data/reports/settlement")),
-        logs_dir=Path(paths.get("logs_dir", "logs")),
+        published_reports_dir=_expand_path(paths.get("published_reports_dir", paths.get("reports_dir", "data/reports"))),
+        settlement_reports_dir=_expand_path(paths.get("settlement_reports_dir", "data/reports/settlement")),
+        logs_dir=_expand_path(paths.get("logs_dir", "logs")),
         logging_level=str(logging.get("level", "INFO")).upper(),
         sharepoint_base_url=str(sharepoint.get("base_url", "")).rstrip("/"),
-        sharepoint_sync_root=Path(sharepoint.get("sync_root", "")),
+        sharepoint_sync_root=_expand_path(sharepoint.get("sync_root", "")),
         # Microsoft Graph credentials for the RR settlement pipeline's --links
         # mode (live SharePoint share-link download). Secrets only, no
         # config.yaml fallback — set them in .env, same as Slack's tokens.
@@ -83,7 +93,9 @@ def load_config(path: str = "config.yaml") -> AppConfig:
         sharepoint_client_id=os.getenv("SHAREPOINT_CLIENT_ID", "").strip(),
         sharepoint_client_secret=os.getenv("SHAREPOINT_CLIENT_SECRET", "").strip(),
         report_engine=str(report.get("engine", "claude_code")),
-        claude_code_binary=str(report.get("claude_code_binary", "")),
+        # Blank -> auto-discover the newest VSCode extension build. Per-machine
+        # override via CLAUDE_CODE_BINARY in .env, same pattern as the secrets.
+        claude_code_binary=str(report.get("claude_code_binary", "") or os.getenv("CLAUDE_CODE_BINARY", "")).strip(),
         report_model=str(report.get("model", "")),
         # Slack delivery. Prefer env vars (kept in .env, gitignored) and fall
         # back to optional values in config.yaml. A bot token + channel takes
