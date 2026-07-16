@@ -46,7 +46,7 @@ import pathlib
 import tempfile
 from typing import Any
 
-from src.settlement import rr_structure
+from src.settlement import pagination, rr_structure
 from src.settlement.settlement_report import build
 from src.summaries.report_engine import ReportEngine, build_engine
 
@@ -54,6 +54,9 @@ LOGGER = logging.getLogger(__name__)
 
 HERE = pathlib.Path(__file__).parent
 PROMPT_PATH = HERE / "rr_extraction_prompt.md"
+# SME-maintained PCI vocabulary (determinant->calc-class terms, team
+# conventions like "shadow calculation"); injected into the prompt when filled.
+VOCAB_PATH = HERE.parent.parent / "config" / "pci_vocabulary.yaml"
 
 
 def graph_token(tenant: str, client_id: str, client_secret: str) -> str:
@@ -81,13 +84,44 @@ def resolve_and_download(url: str, token: str, dest: str) -> str:
     return meta.get("name", "")
 
 
+def _vocabulary_block() -> str:
+    """SME-maintained PCI vocabulary, or "" when the file is absent/empty."""
+    try:
+        text = VOCAB_PATH.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+    # Skip when the file is only comments/blank — nothing to inject yet.
+    meaningful = [l for l in text.splitlines() if l.strip() and not l.strip().startswith("#")]
+    return text if meaningful else ""
+
+
 def call_llm(engine: ReportEngine, marked: str, report: dict, url: str | None) -> dict:
     """Only for SETTLEMENT_CALC + PASS. Feeds the extraction prompt + marked text
     + charge-type index (the mandatory checklist) to the configured LLM engine."""
     instruction = PROMPT_PATH.read_text(encoding="utf-8")
-    checklist = json.dumps(report["charge_type_index"], ensure_ascii=False)
+    # Stories are scoped to the Market Protocols / Settlement User Guide
+    # sections ONLY (the ones with formulas + determinants) — Tariff and other
+    # documents are context, never story items (Elizabeth, 2026-07-15).
+    mp_index = [i for i in report["charge_type_index"] if i["banner"].startswith("Market")]
+    checklist = json.dumps(mp_index, ensure_ascii=False)
+    citations = json.dumps(report.get("citations", {}).get("rr_document", []), ensure_ascii=False)
+    initiative = report.get("market_initiative", "")
+    initiative_cite = report.get("market_initiative_citation", "")
+    initiative_line = f"{initiative} [{initiative_cite}]" if initiative and initiative_cite else (initiative or "not stated")
+    images = sorted(report.get("formula_images", {}))
+    vocab = _vocabulary_block()
     context = (f"SHAREPOINT_URL: {url}\n"
-               f"CHARGE_TYPE_CHECKLIST (one story per entry): {checklist}\n\n"
+               f"MARKET_INITIATIVE (verbatim from the CUF/SUF slide, with its source): {initiative_line}\n"
+               f"MARKET_PROTOCOLS_VERSION (Settlement User Guide version from the Impacted-Documents block): "
+               f"{report.get('protocol_version') or 'not stated'}\n"
+               f"PROTOCOLS_FOLDER (synced SharePoint copy of the Marketplace Protocols / Settlement User "
+               f"Guide for cross-linking): {report.get('protocols_folder_url') or 'not available'}\n"
+               f"FORMULA_IMAGES (extracted PNGs referenced by [[EQ-IMG: ...]] markers; in SPP RRs these "
+               f"are usually a lone summation operator whose operands are the surrounding text): "
+               f"{', '.join(images) or 'none'}\n"
+               f"CITATIONS (page-anchored references into the RR — use these page numbers verbatim): {citations}\n"
+               + (f"\nPCI VOCABULARY (SME-maintained; use these terms/conventions in stories):\n{vocab}\n" if vocab else "")
+               + f"CHARGE_TYPE_CHECKLIST (one story per entry; Market Protocols/SUG only): {checklist}\n\n"
                f"=== RR DOCUMENT (equations + redlines preserved) ===\n{marked}")
     try:
         return engine.generate(instruction, context)
@@ -96,14 +130,47 @@ def call_llm(engine: ReportEngine, marked: str, report: dict, url: str | None) -
         return {"stories": [], "warning": f"LLM call failed: {exc}"}
 
 
-def process_one(docx_path: str, url: str | None, engine: ReportEngine | None) -> dict[str, Any]:
+def process_one(
+    docx_path: str,
+    url: str | None,
+    engine: ReportEngine | None,
+    initiatives: dict[str, str] | None = None,
+    images_root: str | None = None,
+    protocols_url: str = "",
+) -> dict[str, Any]:
     report, marked, _hard_fail = rr_structure.extract(docx_path, rr_structure.DEFAULT_BANNERS, sharepoint_url=url)
     rr = report.get("rr_id", os.path.basename(docx_path))
     cls = report["rr_class"]
     status = report["reconciliation"]["status"]
-    LOGGER.info("[%s] class=%s status=%s", rr, cls, status)
+    # Link the RR to its market initiative (named on the CUF/SUF slide, not in
+    # the RR document itself). Verbatim slide wording + file/page citation so
+    # every initiative claim in the outputs is checkable against the slide.
+    rr_digits = "".join(ch for ch in str(rr) if ch.isdigit())
+    entry = (initiatives or {}).get(rr_digits) or {}
+    report["market_initiative"] = entry.get("label", "")
+    report["market_initiative_citation"] = entry.get("citation", "")
+    report["protocols_folder_url"] = protocols_url
+    LOGGER.info("[%s] class=%s status=%s initiative=%s", rr, cls, status, report["market_initiative"] or "-")
+
+    # Legacy MathType equations render as images; extract them as PNGs so the
+    # [[EQ-IMG: imageN.wmf]] markers in the text have something to point at.
+    report["formula_images"] = {}
+    if images_root and cls == "SETTLEMENT_CALC" and "[[EQ-IMG:" in marked:
+        img_dir = os.path.join(images_root, rr_digits and f"rr{rr_digits}" or "rr")
+        report["formula_images"] = rr_structure.extract_formula_images(docx_path, img_dir)
+        LOGGER.info("[%s] extracted %d formula images -> %s", rr, len(report["formula_images"]), img_dir)
+
+    # Some RR docx files carry no saved pagination (every section reports page
+    # 1). Page-anchored citations are a hard requirement, so render the docx
+    # to PDF via headless Word and take the true page numbers from there.
+    if images_root and cls == "SETTLEMENT_CALC":
+        try:
+            pagination.repaginate(report, docx_path, os.path.join(images_root, "..", "rendered"))
+        except Exception as exc:  # pagination must never sink the pipeline
+            LOGGER.warning("[%s] repagination failed: %s", rr, exc)
+
     stories = None
-    if engine is not None and cls == "SETTLEMENT_CALC" and status == "PASS":
+    if engine is not None and cls == "SETTLEMENT_CALC" and status in ("PASS", "PASS_NUMBERING_MAPPED"):
         stories = call_llm(engine, marked, report, url)
     return {"report": report, "stories": stories}
 
@@ -117,11 +184,18 @@ def run(
     tenant: str = "",
     client_id: str = "",
     client_secret: str = "",
-) -> str:
+    initiatives: dict[str, str] | None = None,
+    protocols_url: str = "",
+) -> tuple[str, list[dict[str, Any]]]:
     """Run the pipeline over local files and/or SharePoint links and write the xlsx.
+
+    Returns ``(out_path, results)`` so callers can feed the per-RR results into
+    further outputs (e.g. the Jira story workbook) without re-parsing.
 
     `engine` is None for a classification-only pass (no LLM calls, no Jira
     stories) — used for a fast triage run or in tests via StubEngine.
+    `initiatives` maps RR digits ("728") to the market initiative named on the
+    CUF/SUF slide that mentioned it (from the run pipeline's cross-reference).
     """
     jobs: list[tuple[str, str | None]] = [(f, None) for f in (files or [])]
     if links:
@@ -132,10 +206,24 @@ def run(
             resolve_and_download(url, token, dest)
             jobs.append((dest, url))
 
-    results = [process_one(docx, url, engine) for docx, url in jobs]
+    images_root = os.path.join(os.path.dirname(os.path.abspath(out_path)), "images")
+    results = [process_one(docx, url, engine, initiatives, images_root, protocols_url) for docx, url in jobs]
     build(results, out_path)
     LOGGER.info("Wrote %s", out_path)
-    return out_path
+
+    # Persist every LLM-generated story set as JSON next to the report — the
+    # stories must survive the run even when workbook generation is paused,
+    # both for review and so a later workbook pass can reuse them without a
+    # second (expensive) LLM call.
+    stories_dir = pathlib.Path(out_path).parent / "stories"
+    for res in results:
+        if res.get("stories"):
+            stories_dir.mkdir(parents=True, exist_ok=True)
+            rr = str(res["report"].get("rr_id", "RR")).replace(" ", "")
+            path = stories_dir / f"{rr}-{pathlib.Path(out_path).stem}.json"
+            path.write_text(json.dumps(res["stories"], indent=2, ensure_ascii=False), encoding="utf-8")
+            LOGGER.info("[%s] stories JSON written: %s", rr, path)
+    return out_path, results
 
 
 def read_links_file(path: str) -> list[str]:

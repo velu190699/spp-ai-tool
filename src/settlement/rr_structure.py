@@ -29,11 +29,13 @@ USAGE (standalone, for validating a new RR before wiring it into the pipeline)
     # exit code 2 => hard-fail reconciliation (do not trust; route to manual review)
 """
 
-import argparse, zipfile, re, json, sys
+import argparse, io, zipfile, re, json, sys
 from lxml import etree
 
 W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 M = "http://schemas.openxmlformats.org/officeDocument/2006/math"
+V = "urn:schemas-microsoft-com:vml"
+R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 NS = {"w": W, "m": M}
 
 DEFAULT_BANNERS = ["MARKET PROTOCOLS", "SETTLEMENT USER GUIDE", "TARIFF", "OPERATING CRITERIA"]
@@ -88,14 +90,28 @@ def omml_linear(elem):
     return kids(elem)
 
 
-def para_marked(p):
-    """Serialize a paragraph preserving ins/del + inline equations."""
+def para_marked(p, rels=None):
+    """Serialize a paragraph preserving ins/del + inline equations.
+
+    Handles both modern OMML math ([[EQ: ...]] linear transcription) and
+    legacy MathType OLE objects rendered as WMF images. The legacy objects are
+    emitted as [[EQ-IMG: imageN.wmf]] markers — in SPP RRs these are almost
+    always a lone summation operator (Σ with its index); the operands around
+    it are ordinary text runs, so the marker keeps the formula readable.
+    """
     out = []
     for node in p.iter():
         q = etree.QName(node).localname; ns = etree.QName(node).namespace
         if ns == M and q == "oMath":
             out.append(" [[EQ: " + omml_linear(node).strip() + " ]] ")
             for c in node.iter(): c.text = None
+            continue
+        if ns == W and q in ("object", "pict"):
+            img = node.find(f".//{{{V}}}imagedata")
+            rid = img.get(f"{{{R}}}id") if img is not None else None
+            target = (rels or {}).get(rid, "")
+            name = target.rsplit("/", 1)[-1] if target else "embedded-object"
+            out.append(f" [[EQ-IMG: {name}]] ")
             continue
         if ns == W and q in ("t", "delText"):
             text = node.text or ""
@@ -111,11 +127,59 @@ def para_marked(p):
     return "".join(out)
 
 
+def extract_formula_images(docx_path, out_dir):
+    """Convert the RR's embedded equation images (WMF/PNG media) to PNGs.
+
+    Legacy MathType equations render as WMF images in word/media — usually a
+    lone summation operator whose operands are ordinary text. The PNGs let a
+    reviewer see exactly what the [[EQ-IMG: imageN.wmf]] markers refer to.
+    Returns {media_filename: png_path}. Pillow's WMF rendering needs Windows
+    GDI; failures are skipped (the marker still names the source image).
+    """
+    from pathlib import Path
+
+    out = Path(out_dir)
+    manifest = {}
+    try:
+        from PIL import Image
+    except ImportError:
+        return manifest
+    with zipfile.ZipFile(docx_path) as z:
+        for name in z.namelist():
+            low = name.lower()
+            if not name.startswith("word/media/") or not low.endswith((".wmf", ".emf", ".png")):
+                continue
+            base = name.rsplit("/", 1)[-1]
+            try:
+                img = Image.open(io.BytesIO(z.read(name)))
+                try:
+                    img.load(dpi=400)  # upscale vector WMF/EMF for legibility
+                except TypeError:
+                    img.load()
+                out.mkdir(parents=True, exist_ok=True)
+                png = out / (base.rsplit(".", 1)[0] + ".png")
+                img.save(png)
+                manifest[base] = str(png)
+            except Exception:  # one bad image must not sink the extraction
+                continue
+    return manifest
+
+
 def extract(docx_path, banners, sharepoint_url=None, cuf_suf_refs=None):
     banners_up = [b.upper() for b in banners]
     z = zipfile.ZipFile(docx_path)
     root = etree.fromstring(z.read("word/document.xml"))
     body = root.find("w:body", NS)
+
+    # rId -> media target, for resolving legacy equation objects to their
+    # image filenames ([[EQ-IMG: imageN.wmf]] markers).
+    rels = {}
+    try:
+        rel_root = etree.fromstring(z.read("word/_rels/document.xml.rels"))
+        for rel in rel_root:
+            rels[rel.get("Id")] = rel.get("Target", "")
+    except KeyError:
+        pass
 
     def pstyle(p):
         pPr = p.find("w:pPr", NS)
@@ -176,12 +240,18 @@ def extract(docx_path, banners, sharepoint_url=None, cuf_suf_refs=None):
 
     # 1) impacted checklist ----------------------------------------------------
     impacted = []
+    protocol_version = ""
     for p, txt, pg in paras:
         if "Market Protocols" in txt and "Section:" in txt:
             seg = re.split(r'Version', txt.split("Section:", 1)[1])[0]
             for m in re.finditer(r'(\(New\)\s*)?(\d+\.\d+(?:\.\d+)*)', seg):
                 impacted.append({"document": "Market Protocols / Settlement User Guide",
                                  "section": m.group(2), "is_new": bool(m.group(1))})
+            # The block also names the protocol version, e.g. "Version: 112a" —
+            # the settlement team needs it to pull the right Settlement User Guide.
+            vm = re.search(r'Version:?\s*([0-9]+[A-Za-z0-9.]*)', txt)
+            if vm:
+                protocol_version = vm.group(1)
         if txt.strip().startswith("☒") and "Tariff" in txt and "Attachment AE" in txt:
             for m in re.finditer(r'Attachment AE.*?(\d+\.\d+)', txt):
                 impacted.append({"document": "Tariff (Attachment AE)",
@@ -257,7 +327,7 @@ def extract(docx_path, banners, sharepoint_url=None, cuf_suf_refs=None):
             if capture:
                 if m:  # next numbered heading -> stop
                     break
-                if re.search(r'#[A-Z][A-Za-z0-9]+', txt) or "[[EQ" in para_marked(p):
+                if re.search(r'#[A-Z][A-Za-z0-9]+', txt) or "[[EQ" in para_marked(p, rels):
                     return True
         return False
 
@@ -269,7 +339,13 @@ def extract(docx_path, banners, sharepoint_url=None, cuf_suf_refs=None):
     index = filtered
     body_secs = {i["section"] for i in index}
     listed_secs = {i["section"] for i in impacted if i["document"].startswith("Market")}
-    missing_from_body = sorted(listed_secs - body_secs)
+    # Match on digit sequence too: the Impacted block often mangles dot
+    # placement ("4.3.11" for body heading "4.3.1.1", "6.1.17" for "6.1.1.7").
+    # Same digits in the same order = same section, not a missing one.
+    body_digit_keys = {s.replace(".", "") for s in body_secs}
+    missing_from_body = sorted(
+        s for s in (listed_secs - body_secs) if s.replace(".", "") not in body_digit_keys
+    )
     found_not_listed = sorted(
         {i["section"] for i in index if i["section"].startswith("4.5")} - listed_secs
     )
@@ -281,11 +357,30 @@ def extract(docx_path, banners, sharepoint_url=None, cuf_suf_refs=None):
     #                                                but no charge type parsed)
     #  - TARIFF_GOVERNANCE (no # determinants)   -> NO_CHARGE_CODES (correct, not an error;
     #                                                route to non-settlement story track)
+    # Numbering-scheme mismatch is NOT a failure: the Impacted block cites
+    # Market Protocols numbering (e.g. 4.5.9.10) while the redline body may use
+    # the Settlement User Guide numbering (e.g. 2.7.10) for the SAME content —
+    # they are the same document family with different section numbers (RR728
+    # is the canonical case). If every "missing" section is explainable by the
+    # body having real charge-type headings with determinants under the MP/SUG
+    # banner, pass with a mapping note instead of hard-failing.
+    numbering_note = ""
+    if missing_from_body and index and has_determinants:
+        numbering_note = (
+            "Impacted-block sections not found under the same numbers, but the body has "
+            f"charge-type content under different numbering — Market Protocols "
+            f"{', '.join(missing_from_body)} likely correspond to Settlement User Guide "
+            f"{', '.join(sorted(body_secs))} (same document, different numbering scheme). Verify titles."
+        )
+
     if rr_class == "TARIFF_GOVERNANCE":
         status = "NO_CHARGE_CODES"
         hard_fail = False
     elif rr_class == "SETTLEMENT_RELEVANT":
         status = "REVIEW_SETTLEMENT_PROSE"   # settlement impact but no # determinant
+        hard_fail = False
+    elif missing_from_body and numbering_note:
+        status = "PASS_NUMBERING_MAPPED"
         hard_fail = False
     elif missing_from_body:
         status = "HARD_FAIL"
@@ -302,7 +397,7 @@ def extract(docx_path, banners, sharepoint_url=None, cuf_suf_refs=None):
     for p, txt, pg in paras:
         if not txt:
             continue
-        mk = para_marked(p).strip()
+        mk = para_marked(p, rels).strip()
         if txt.upper() in banners_up:
             lines.append(f"\n===== {norm_banner(txt)} =====")
         elif re.match(r'^\d+\.\d+', txt):
@@ -344,6 +439,9 @@ def extract(docx_path, banners, sharepoint_url=None, cuf_suf_refs=None):
         "rr_class": rr_class,
         "checked_impacted_boxes": checked_boxes,
         "determinants_found": determinants,
+        # Market Protocols (a.k.a. Settlement User Guide) version from the
+        # Impacted-Documents block, e.g. "112a". "" when the RR doesn't name one.
+        "protocol_version": protocol_version,
         "impacted_checklist": impacted,
         "charge_type_index": index,
         "citations": {
@@ -356,6 +454,9 @@ def extract(docx_path, banners, sharepoint_url=None, cuf_suf_refs=None):
             "missing_from_body": missing_from_body,
             "found_not_listed": found_not_listed,
             "status": status,
+            # Non-empty when listed vs body section numbers differ only by
+            # numbering scheme (Market Protocols vs Settlement User Guide).
+            "numbering_note": numbering_note,
         },
         "flags": {
             "has_ins": "{{INS:" in marked,

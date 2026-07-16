@@ -1,6 +1,7 @@
 beautifulsoup4==4.12.3
 Jinja2==3.1.4
 lxml==6.1.1
+Pillow==11.3.0
 msal==1.37.0
 openpyxl==3.1.5
 pypdf==5.1.0

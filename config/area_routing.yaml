@@ -1,0 +1,46 @@
+# PROVISIONAL area -> topic routing for the "SPP Market Changes Summary" report.
+# Status: best-guess pending Kashmita Ghimire's SME review (2026-07 feedback
+# meeting). Edit this file to correct routing — no code change needed; the
+# report builder reads it on every run.
+#
+# Known corrections already applied (from the 2026-07-13 feedback meeting):
+# - WEIS / SPP West wind-down and final settlement belong to Market Systems
+#   (market settlements), NOT ETRM.
+# - Bilateral changes are ambiguous by nature: they affect ETRM (deal calcs)
+#   AND Market Systems (bilateral settlement charge codes) — flag in BOTH.
+areas:
+  market_systems:
+    name: Market Systems
+    topics:
+      - settlements, charge codes, billing determinants
+      - market initiative go-lives (e.g. fall/spring market changes)
+      - WEIS / SPP West wind-down and final settlements
+      - bidding, offers, mitigated offers
+      - Markets+, RTOE, FO/BO
+      - bilateral settlements (ALSO flag under ETRM)
+  asset_operations:
+    name: Asset Operations
+    topics:
+      - CROW, resource adequacy, generation, outage management
+  transmissions:
+    name: Transmissions
+    topics:
+      - transmission scheduling, WebCheckout, OASIS, TPO, e-tag
+      - EDAM/M+ BA, Order 881
+  etrm:
+    name: ETRM
+    topics:
+      - e-tag / transmission data, deal calcs
+      - bilateral deals and confirmations (ALSO flag under Market Systems)
+  optimization:
+    name: Optimization
+    topics:
+      - DART Trader, GenTrader, battery/storage, forecasting, post analysis
+
+# Free-form rules appended to the routing guide verbatim. Use these for
+# cross-area guidance that doesn't fit a single area's topic list.
+rules:
+  - Bilateral-related changes must be flagged in BOTH ETRM and Market Systems —
+    never routed to only one of them.
+  - WEIS / SPP West wind-down items (including final settlement activities) are
+    Market Systems (market settlements), not ETRM.

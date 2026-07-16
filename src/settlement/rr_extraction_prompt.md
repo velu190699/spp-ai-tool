@@ -8,6 +8,13 @@ completeness of prose — extract facts, do not summarize.
 You receive the FULL content of ONE RR document, pre-processed so that:
 - Tracked changes are marked inline as {{INS: ...}} (inserted) and {{DEL: ...}} (deleted).
 - Equation objects are transcribed inline as [[EQ: ... ]] in linear notation.
+- Legacy equation images appear as [[EQ-IMG: imageN.wmf]] markers. In SPP RRs these are
+  almost always a LONE SUMMATION OPERATOR (Σ with its index); the operands are the
+  ordinary text around the marker. Reconstruct the formula in linear notation using
+  SUM_<index>(...) — infer the index from the operand subscripts (a 5-min quantity
+  summed to hourly uses index i; daily roll-ups use h; monthly use d). Reference the
+  image name so a reviewer can verify: "RtSlDevIncHrlyQty = SUM_i(RtSlDevInc5minQty)
+  [eq: image12]".
 - Section headings are preserved on their own lines.
 
 If the input does NOT contain {{INS}}/{{DEL}} markers or [[EQ]] blocks anywhere, the
@@ -15,6 +22,17 @@ document was extracted with a lossy reader. In that case set
 "extraction_quality": "DEGRADED" in your output and populate
 "warnings" with: "No redline/equation markers found — charge code detection unreliable;
 re-run with equation- and revision-preserving extraction."
+
+## SCOPE — Market Protocols / Settlement User Guide ONLY
+
+Stories are built EXCLUSIVELY from the Market Protocols / Settlement User Guide
+sections — the ones that carry the charge-code formulas and billing determinants.
+Tariff, Planning Criteria, Business Practices, and every other impacted document
+are NOT story material: mention them in at most ONE context sentence in the
+description's background ("Tariff Attachment AE 8.6.7 contains the parallel
+tariff-language change") and never as numbered items. If the redlines contain a
+Tariff section followed by the Settlement User Guide section for the same charge
+code, extract the formulas from the Settlement User Guide portion.
 
 ## MANDATORY PROCEDURE — follow in order, do not skip
 
@@ -84,15 +102,47 @@ For MODIFIED, give both before (from {{DEL}}) and after (from {{INS}}).
       "summary": "RR623 §4.5.19 – Add SSR Distribution Amount (#SsrMnthlyDistAoAmt)",
       "issue_type": "Story",
       "story_type": "Calculation Change",
-      "description": "<what to build, incl. the formula>",
+      "description": "<see DESCRIPTION FORMAT below — numbered list of every formula change>",
       "acceptance_criteria": ["...", "..."],
       "charge_codes_touched": ["#SsrMnthlyDistAoAmt"],
       "change_status": "ADDED",
       "impacted_docs": ["Market Protocols 4.5.19"],
-      "market_initiative": "<if stated in doc, else empty>"
+      "market_initiative": "<use the MARKET_INITIATIVE given in the input; if 'not stated' there, use the initiative named in the doc; else empty>"
     }
   ]
 }
+
+## DESCRIPTION FORMAT — the description is the deliverable; follow this shape
+
+Start EVERY story's description with the standard go-live parameter block:
+
+"a. Add a parameter for go live of <MARKET_INITIATIVE or 'this RR'> (<RR id>). The
+Operating Dates prior to the go live date need to use the old calculation logic and
+only the dates after go live need to use the updated calculation. Go Live Date TBD."
+
+Then, for each Charge Code the story covers, enumerate EVERY formula suggestion found in
+the document's revision markup — added ({{INS}}), replaced ({{DEL}}→{{INS}} pairs),
+and deleted ({{DEL}}) — as a NUMBERED list, one item per change, in this style:
+
+1. Update the calculation for <determinant> to match: <formula after> (was: <formula before>). [p.X]
+2. Add calculation for <determinant>: <formula>. Round per the document if stated. [p.X]
+3. Remove <determinant> from <charge code> — deleted in this RR. [p.X]
+
+Rules for the description:
+- Name the billing determinants explicitly in every item (e.g. #SsrMnthlyDistAoAmt,
+  SsrShareAoPct) — identifying the determinants is the point of the story.
+- Do not summarize away a change: if the redlines show 12 formula changes, the
+  description has 12 numbered items.
+- Numbered items come ONLY from the Market Protocols / Settlement User Guide
+  sections (see SCOPE). Tariff and other documents get at most one background
+  sentence, no items.
+- Every item MUST end with its RR page citation "[p.X]" taken from the CITATIONS
+  input — never invent a page; if a section has no page in CITATIONS, write
+  "[p. n/a]".
+- Reference the Market Protocols (Settlement User Guide) section and, when given,
+  the MARKET_PROTOCOLS_VERSION, and close the description with a line linking the
+  protocol copy: "Settlement User Guide <version>: <PROTOCOLS_FOLDER url>" when a
+  PROTOCOLS_FOLDER is provided.
 
 ## STORY TYPE — classify each Jira story as exactly one of:
 "Calculation Change" | "GUI & Extracts" | "Market Rules" | "Data Model / Config" | "Reference Data / Setup"

@@ -162,3 +162,31 @@ def test_format_report_link_message_note_overrides_link_line():
     assert "Report generation failed" in body
     assert "published locally" not in body
     assert "Report generation failed" in payload["text"]
+
+def test_send_slack_failure_posts_via_webhook_and_truncates():
+    response = MagicMock()
+    with patch("src.notifications.notifier.requests.post", return_value=response) as post:
+        from src.notifications.notifier import send_slack_failure
+
+        assert send_slack_failure("run", "RuntimeError: " + "x" * 600, webhook_url="https://hooks.slack/x") is True
+        payload = post.call_args.kwargs["json"]
+        assert "SPP tool FAILED at run" in payload["text"]
+        assert len(payload["text"]) < 600  # long tracebacks are truncated
+        assert ":rotating_light:" in payload["blocks"][0]["text"]["text"]
+
+
+def test_send_slack_failure_skips_when_unconfigured():
+    with patch("src.notifications.notifier.requests.post") as post:
+        from src.notifications.notifier import send_slack_failure
+
+        assert send_slack_failure("report", "boom") is False
+        post.assert_not_called()
+
+
+def test_relevant_rr_line_marks_updated_rrs():
+    from src.notifications.notifier import _relevant_rr_line
+
+    plain = _relevant_rr_line({"rr_number": "728", "title": "RUC MWP"})
+    assert "UPDATED" not in plain
+    updated = _relevant_rr_line({"rr_number": "728", "title": "RUC MWP", "updated": True})
+    assert "*UPDATED*" in updated and "RR728" in updated

@@ -41,7 +41,15 @@ def extract_pdfs(zip_path: Path, target_dir: Path) -> list[Path]:
     return extract_matching(zip_path, target_dir, (".pdf",))
 
 
-def extract_first_recommendation_report(zip_path: Path, rr_number: str, target_dir: Path) -> Path | None:
+def extract_first_recommendation_report(
+    zip_path: Path, rr_number: str, target_dir: Path, target_name: str | None = None
+) -> Path | None:
+    """Extract the Recommendation Report docx from an RR package.
+
+    ``target_name`` overrides the stored filename — used for re-published RR
+    packages, which are saved as dated revision files next to the original
+    instead of overwriting it (the original is never touched again).
+    """
     target_dir.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(zip_path) as archive:
         for member in archive.infolist():
@@ -50,7 +58,7 @@ def extract_first_recommendation_report(zip_path: Path, rr_number: str, target_d
             name = Path(member.filename).name
             if not (name.lower().endswith(".docx") and "recommendation report" in name.lower()):
                 continue
-            target = _safe_target(target_dir, name)
+            target = _safe_target(target_dir, target_name or name)
             with archive.open(member) as source, target.open("wb") as output:
                 output.write(source.read())
             return target

@@ -9,12 +9,21 @@ paths:
   protocols_dir: "${SPP_SYNC_ROOT}/SPPIM/Protocols"
   recommendation_reports_dir: "${SPP_SYNC_ROOT}/SPPIM/Recommendation_Reports"
   rr_master_list_dir: "${SPP_SYNC_ROOT}/SPPIM/RR_Master_List"
-  state_file: data/state/metadata.json
+  # The processing ledger (what was downloaded/analyzed, at which content hash)
+  # lives in the SYNCED folder so every machine that runs the tool shares one
+  # memory. Old repo-local state (data/state/metadata.json) migrates on first run.
+  state_file: "${SPP_SYNC_ROOT}/State/metadata.json"
   reports_dir: data/reports
   # Final HTML report is published here (synced SharePoint "Reports" folder).
-  published_reports_dir: "${SPP_SYNC_ROOT}/Reports"
+  # Market-specific subfolder: the tool is expected to expand beyond SPPIM.
+  published_reports_dir: "${SPP_SYNC_ROOT}/Reports/SPPIM"
   # SPP_RR_Report_Summary-<timestamp>.xlsx (settlement Jira report) is written here.
   settlement_reports_dir: data/reports/settlement
+  # Miquel's Jira story workbook: the blank template the writer fills, and the
+  # synced folder where filled story workbooks are published for PM review
+  # (per-market subfolder, same reasoning as published_reports_dir).
+  jira_template_file: templates/Jira_Story_Creator_template.xlsx
+  jira_stories_dir: "${SPP_SYNC_ROOT}/Story templates/SPPIM"
   logs_dir: logs
 
 # Maps a local synced SharePoint path to its web URL for report citations.

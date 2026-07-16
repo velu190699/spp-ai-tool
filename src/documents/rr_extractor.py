@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from typing import Any
 
 
 RR_PATTERN = re.compile(r"\bRR\s*-?\s*0*(\d{1,5})\b", re.IGNORECASE)
@@ -83,6 +84,80 @@ def extract_action_item_rrs(text: str, *, source: str = "", page: int = 0, conte
     return mentions
 
 
+# How SPP actually names an initiative near an RR mention (observed in real
+# CUF/SUF decks, July 2026): "2026 Settlements Fall Bundle", "Integrated
+# Marketplace release in Fall 2026", "HITT M2 effort" — plus PCI's own
+# "Fall 2026 Market Initiative" form in case a deck uses it. Season+year (or a
+# HITT code) is required: a bare "release" identifies nothing.
+_INITIATIVE_PATTERNS = [
+    re.compile(r"\b(Spring|Summer|Fall|Winter)\s+(20\d{2})\s+(?:SPP\s+)?Market\s+Initiative\b", re.IGNORECASE),
+    re.compile(r"\b(Spring|Summer|Fall|Winter)\s+(?:SPP\s+)?Market\s+Initiative\s+(20\d{2})\b", re.IGNORECASE),
+    re.compile(r"\b(20\d{2})\s+(Spring|Summer|Fall|Winter)\s+(?:SPP\s+)?Market\s+Initiative\b", re.IGNORECASE),
+]
+# Seasonal release/bundle phrasing, e.g. "2026 Settlements Fall Bundle",
+# "release in Fall 2026", "Fall 2026 release".
+_RELEASE_PATTERNS = [
+    re.compile(r"\b(20\d{2})\s+(?:\w+\s+)?(Spring|Summer|Fall|Winter)\s+Bundle\b", re.IGNORECASE),
+    re.compile(r"\brelease\s+in\s+(Spring|Summer|Fall|Winter)\s+(20\d{2})\b", re.IGNORECASE),
+    re.compile(r"\b(Spring|Summer|Fall|Winter)\s+(20\d{2})\s+release\b", re.IGNORECASE),
+]
+# SPP HITT effort codes, e.g. "HITT C1", "HITT M2".
+_HITT_PATTERN = re.compile(r"\bHITT\s+([A-Z]\d+)\b")
+
+
+# For "2026 Settlements Fall Bundle"-style phrasing, widen the verbatim label
+# to the whole capitalized phrase around the season, not just "2026 ... Bundle".
+_BUNDLE_VERBATIM = re.compile(
+    r"\b(20\d{2}\s+(?:[A-Z][A-Za-z]+\s+)?(?:Spring|Summer|Fall|Winter)\s+Bundle)\b"
+)
+
+
+def initiative_from_contexts(
+    contexts: list[object] | None,
+    sources: list[object] | None = None,
+) -> tuple[str, str]:
+    """Name the market initiative an RR belongs to, VERBATIM, with its citation.
+
+    The initiative is announced on the CUF/SUF slide near the RR mention, not
+    inside the RR document itself — so this reads the captured context windows.
+    Returns ``(label, citation)`` where ``label`` is the slide's own wording
+    (e.g. "2026 Settlements Fall Bundle", "release in Fall 2026", "HITT C1" —
+    no normalization, so it can be checked against the slide directly) and
+    ``citation`` is the source file/page of the mention(s) that named it, when
+    ``sources`` (parallel to ``contexts``) is provided. Preference order:
+    explicit "<Season> <Year> Market Initiative" > seasonal release/bundle
+    phrasing > HITT effort code. ``("", "")`` when nothing identifiable.
+    """
+    # label -> (rank, count, citations); lower rank wins, then higher count.
+    found: dict[str, list[Any]] = {}
+
+    def _hit(label: str, rank: int, source: str) -> None:
+        entry = found.setdefault(label, [rank, 0, []])
+        entry[1] += 1
+        if source and source not in entry[2]:
+            entry[2].append(source)
+
+    source_list = [str(s) for s in (sources or [])]
+    for pos, text in enumerate(contexts or []):
+        text = str(text)
+        source = source_list[pos] if pos < len(source_list) else ""
+        for pattern in _INITIATIVE_PATTERNS:
+            for match in pattern.finditer(text):
+                _hit(match.group(0).strip(), 0, source)
+        for pattern in _RELEASE_PATTERNS:
+            for match in pattern.finditer(text):
+                wide = _BUNDLE_VERBATIM.search(text)
+                _hit((wide.group(1) if wide else match.group(0)).strip(), 1, source)
+        for match in _HITT_PATTERN.finditer(text):
+            _hit(match.group(0).strip(), 2, source)
+
+    if not found:
+        return "", ""
+    label = min(found, key=lambda k: (found[k][0], -found[k][1]))
+    citations = found[label][2]
+    return label, "; ".join(citations[:2])
+
+
 def merge_mentions(mentions: list[RRMention]) -> dict[str, dict[str, object]]:
     merged: dict[str, dict[str, object]] = {}
     for mention in mentions:
@@ -98,4 +173,7 @@ def merge_mentions(mentions: list[RRMention]) -> dict[str, dict[str, object]]:
             entry["sources"].append(source_label)
         if mention.context and mention.context not in entry["contexts"]:
             entry["contexts"].append(mention.context)
+            # Parallel to "contexts": which file/page each context came from,
+            # so downstream facts (e.g. the initiative label) stay citable.
+            entry.setdefault("context_sources", []).append(source_label)
     return merged

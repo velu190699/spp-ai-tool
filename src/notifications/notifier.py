@@ -46,6 +46,10 @@ def _relevant_rr_line(rr: dict[str, Any]) -> str:
     url = rr.get("search_url") or ""
     label = f"<{url}|RR{number}>" if url else f"RR{number}"
     line = f"• {label}: {title}"
+    if rr.get("updated"):
+        # SPP re-published this RR since it was last analyzed — reviewers must
+        # treat any previously generated analysis/story for it as stale.
+        line = f"• :arrows_counterclockwise: *UPDATED* {label}: {title}"
     group = rr.get("primary_working_group")
     if group:
         line += f" — {group}"
@@ -146,6 +150,45 @@ def _post_via_bot(bot_token: str, channel: str, payload: dict[str, Any]) -> bool
         LOGGER.error("Slack chat.postMessage rejected the message: %s", data.get("error", "unknown error"))
         return False
     return True
+
+
+def send_slack_failure(
+    step: str,
+    error: str,
+    *,
+    webhook_url: str = "",
+    bot_token: str = "",
+    channel: str = "",
+) -> bool:
+    """Announce a failed scheduled run so it never dies silently.
+
+    Same delivery rules as ``send_slack_report_link``; never raises. The error
+    text is truncated — the log file has the full traceback, Slack only needs
+    enough to know something broke and where.
+    """
+    detail = error if len(error) <= 500 else error[:499] + "…"
+    payload = {
+        "text": f"SPP tool FAILED at {step}: {detail}",
+        "blocks": [
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f":rotating_light: *SPP tool run failed* — step: `{step}`\n```{detail}```\n_See the run log for the full traceback._",
+                },
+            }
+        ],
+    }
+    if bot_token and channel:
+        ok = _post_via_bot(bot_token, channel, payload)
+    elif webhook_url:
+        ok = _post_via_webhook(webhook_url, payload)
+    else:
+        LOGGER.info("Slack not configured; failure notification skipped")
+        return False
+    if ok:
+        LOGGER.info("Posted failure notification to Slack (step: %s)", step)
+    return ok
 
 
 def send_slack_report_link(

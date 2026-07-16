@@ -9,7 +9,10 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
+
+import yaml
 
 from src.summaries.report_engine import ReportEngine
 from src.summaries.report_model import AREA_ORDER, ReportData
@@ -26,16 +29,46 @@ class DocumentText:
     readable: bool = True
 
 
-_AREA_GUIDE = "\n".join(
-    f"- {name} (key: {key})" for key, name in AREA_ORDER
-) + """
+_AREA_LIST = "\n".join(f"- {name} (key: {key})" for key, name in AREA_ORDER)
 
+# Fallback hints if the routing YAML is missing/unreadable. The YAML
+# (config/area_routing.yaml) is authoritative — it carries the SME-corrected
+# topic lists; this fallback keeps the report running, nothing more.
+_FALLBACK_HINTS = """
 Area routing hints:
 - Market Systems: settlements, charge codes, billing determinants, bidding, Markets+, RTOE, FO/BO.
 - Asset Operations: CROW, resource adequacy, generation, outage management.
 - Transmissions: transmission scheduling, WebCheckout, OASIS, TPO, e-tag, EDAM/M+ BA, Order 881.
-- ETRM: e-tag/transmission data, deal calcs, SPP West, bilateral settlements.
+- ETRM: e-tag/transmission data, deal calcs.
 - Optimization: DART Trader, GenTrader, battery/storage, forecasting, post analysis."""
+
+
+def build_area_guide(routing_file: Path | None = None) -> str:
+    """Compose the area list + routing hints for the summarization prompt.
+
+    Hints come from the SME-editable routing YAML so corrections (e.g. "WEIS
+    wind-down is settlements, not ETRM") land without touching code. Any
+    problem reading the file degrades to the static fallback with a warning —
+    a bad edit to the YAML must not take the weekly report down.
+    """
+    if routing_file and routing_file.exists():
+        try:
+            raw = yaml.safe_load(routing_file.read_text(encoding="utf-8")) or {}
+            lines = ["", "Area routing hints:"]
+            for key, name in AREA_ORDER:
+                area = (raw.get("areas") or {}).get(key) or {}
+                topics = "; ".join(str(t) for t in area.get("topics", []))
+                if topics:
+                    lines.append(f"- {area.get('name', name)}: {topics}.")
+            rules = [str(r) for r in raw.get("rules", [])]
+            if rules:
+                lines.append("")
+                lines.append("Routing rules (override the hints above):")
+                lines.extend(f"- {rule}" for rule in rules)
+            return _AREA_LIST + "\n" + "\n".join(lines)
+        except (yaml.YAMLError, OSError) as exc:
+            LOGGER.warning("Could not read area routing file %s (%s); using fallback hints", routing_file, exc)
+    return _AREA_LIST + _FALLBACK_HINTS
 
 
 _SCHEMA = """{
@@ -73,7 +106,8 @@ _SCHEMA = """{
 }"""
 
 
-def build_instruction() -> str:
+def build_instruction(area_guide: str | None = None) -> str:
+    guide = area_guide if area_guide is not None else build_area_guide()
     return f"""You are producing the "SPP Market Changes Summary" report for PCI Energy Solutions
 from the CUF and SUF meeting materials provided in the piped input.
 
@@ -81,7 +115,7 @@ Do NOT use any tools. Do NOT read files. Use ONLY the document text provided in 
 input. Respond with a SINGLE JSON object and nothing else — no prose, no markdown fences.
 
 The five PCI areas (route every change to one or more; include all five even if empty):
-{_AREA_GUIDE}
+{guide}
 
 The JSON must match this exact schema:
 {_SCHEMA}
@@ -154,8 +188,9 @@ def build_report(
     generated: str,
     cuf_url: str = "",
     suf_url: str = "",
+    routing_file: Path | None = None,
 ) -> ReportData:
-    instruction = build_instruction()
+    instruction = build_instruction(build_area_guide(routing_file))
     context = build_context(
         cuf_label=cuf_label,
         suf_label=suf_label,

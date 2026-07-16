@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -25,9 +26,10 @@ from src.documents.local_source import (
     to_sharepoint_url,
 )
 from src.documents.pdf_parser import parse_pdf
-from src.documents.rr_extractor import merge_mentions
+from src.documents.rr_extractor import initiative_from_contexts, merge_mentions
 from src.documents.zip_utils import extract_first_recommendation_report, extract_pdfs
-from src.notifications.notifier import log_slack_draft, send_slack_report_link
+from src.notifications.notifier import log_slack_draft, send_slack_failure, send_slack_report_link
+from src.settlement import jira_template_writer
 from src.settlement import pipeline as settlement_pipeline
 from src.state.metadata_store import MetadataStore
 from src.summaries.html_renderer import render_report
@@ -126,6 +128,14 @@ def get_or_download(
 
     local_path = client.download(document, downloads_dir)
     file_hash = sha256_file(local_path)
+    # A tracked document can land here when its cached file is gone (zips are
+    # deleted after extraction). Compare against the recorded hash so a
+    # re-published document (same name, new content) is detected as changed
+    # instead of silently treated as already-processed.
+    old_hash = existing.existing.get("sha256") if existing.existing else None
+    content_changed = existing.is_new or (old_hash is not None and old_hash != file_hash)
+    if not existing.is_new and content_changed:
+        LOGGER.info("%s content changed since last run (re-published): %s", family, document.filename)
     state.record_document(
         document.document_id,
         document.filename,
@@ -137,7 +147,7 @@ def get_or_download(
             "local_path": str(local_path),
         },
     )
-    return local_path, existing.is_new
+    return local_path, content_changed
 
 
 def require_document(name: str, document: SppDocument | None) -> SppDocument:
@@ -174,6 +184,11 @@ def build_relevant_rrs(open_rrs: dict[str, RRRecord], mentioned: dict[str, dict[
         record = open_rrs.get(rr_number)
         if not record:
             continue
+        # Which initiative the CUF/SUF slide ties this RR to — VERBATIM slide
+        # wording plus the file/page citation so a reviewer can check the slide.
+        initiative, initiative_citation = initiative_from_contexts(
+            mention_data.get("contexts", []), mention_data.get("context_sources", [])
+        )
         relevant.append(
             {
                 "rr_number": rr_number,
@@ -184,6 +199,8 @@ def build_relevant_rrs(open_rrs: dict[str, RRRecord], mentioned: dict[str, dict[
                 "dates": mention_data.get("dates", []),
                 "sources": mention_data.get("sources", []),
                 "search_url": record.search_url,
+                "market_initiative": initiative,
+                "market_initiative_citation": initiative_citation,
             }
         )
     return relevant
@@ -212,7 +229,7 @@ def process_recommendation_reports(
         if not document:
             skipped.append(f"RR{rr['rr_number']}: no RR package found")
             continue
-        zip_path, _ = get_or_download(
+        zip_path, package_changed = get_or_download(
             family="recommendation_reports",
             document=document,
             client=client,
@@ -221,10 +238,13 @@ def process_recommendation_reports(
             dry_run=dry_run,
             warnings=warnings,
         )
-        # Skip if the docx already exists on disk
+        # Skip only when the docx is on disk AND the package content is
+        # unchanged. SPP re-publishes RR packages under the same filename; a
+        # changed hash means a revised Recommendation Report that must be
+        # re-extracted and flagged as an UPDATE downstream, not skipped.
         existing_docx = config.recommendation_reports_dir / f"rr{rr['rr_number']}" / f"RR{rr['rr_number']} Recommendation Report.docx"
-        if existing_docx.exists() and not dry_run:
-            LOGGER.info("RR%s: Recommendation Report already on disk, skipping", rr['rr_number'])
+        if existing_docx.exists() and not package_changed and not dry_run:
+            LOGGER.info("RR%s: Recommendation Report already on disk and unchanged, skipping", rr['rr_number'])
             stored_reports.append({"rr_number": rr["rr_number"], "stored": str(existing_docx), "skipped": True})
             continue
         if dry_run or zip_path is None:
@@ -233,7 +253,14 @@ def process_recommendation_reports(
         target_dir = config.recommendation_reports_dir / f"rr{rr['rr_number']}"
         # Store only the first exact Recommendation Report filename. Other Word
         # files in the RR package are not substitutes for this v1 contract.
-        report = extract_first_recommendation_report(zip_path, rr["rr_number"], target_dir)
+        # A re-published package NEVER overwrites the original docx: the new
+        # version is stored alongside as a dated .rev-YYYYMMDD file (the team's
+        # folder structure is append-only; originals stay untouched).
+        is_revision = existing_docx.exists() and package_changed
+        revision_name = None
+        if is_revision:
+            revision_name = f"{existing_docx.stem}.rev-{datetime.now().strftime('%Y%m%d')}.docx"
+        report = extract_first_recommendation_report(zip_path, rr["rr_number"], target_dir, target_name=revision_name)
         if report and zip_path.exists():
             zip_path.unlink()  # delete the zip after extracting
         if not report:
@@ -241,11 +268,19 @@ def process_recommendation_reports(
             warnings.append(warning)
             LOGGER.warning(warning)
             continue
+        if is_revision:
+            rr["updated"] = True
+            warnings.append(
+                f"RR{rr['rr_number']}: SPP re-published the Recommendation Report — saved as "
+                f"{report.name} next to the original (which is unchanged). Analyses should use "
+                f"the newest revision (UPDATE)."
+            )
         stored_reports.append(
             {
                 "rr_number": rr["rr_number"],
                 "package": document_summary(document),
                 "stored": str(report),
+                "updated": is_revision,
             }
         )
     return stored_reports
@@ -255,7 +290,8 @@ def run(dry_run: bool) -> int:
     config = load_config()
     ensure_runtime_dirs(config)
     setup_logging(config.logs_dir, config.logging_level)
-    state = MetadataStore(config.state_file)
+    # legacy_path: pre-shared-state location (repo-local); migrated on first run.
+    state = MetadataStore(config.state_file, legacy_path=Path("data/state/metadata.json"))
     client = SppClient()
     run_id = datetime.now().strftime("%Y%m%d-%H%M%S")
     warnings: list[str] = []
@@ -366,11 +402,14 @@ def run(dry_run: bool) -> int:
                 LOGGER.info("Using cached CUF mentions (document unchanged)")
                 family_outputs["cuf"] = {"stored": [], "mentions": cached}
             else:
-                LOGGER.info("No CUF mentions cache — re-parsing existing PDFs")
-                existing_cuf_pdfs = list(config.cuf_dir.rglob("*.pdf"))
-                if existing_cuf_pdfs:
+                LOGGER.info("No CUF mentions cache — re-parsing the LATEST CUF edition")
+                # Only the newest edition: relevance is defined by the latest
+                # CUF/SUF materials, not by every meeting still in the folder.
+                latest = latest_cuf_edition(config.cuf_dir, config.sharepoint_sync_root, config.sharepoint_base_url)
+                latest_pdfs = [f.local_path for f in latest.files if f.local_path.suffix.lower() == ".pdf"] if latest else []
+                if latest_pdfs:
                     family_outputs["cuf"] = process_pdf_family(
-                        family="cuf", files=existing_cuf_pdfs, warnings=warnings, dry_run=dry_run
+                        family="cuf", files=latest_pdfs, warnings=warnings, dry_run=dry_run
                     )
                     state.save_mentions("cuf", family_outputs["cuf"]["mentions"])
         elif cuf_path:
@@ -387,11 +426,12 @@ def run(dry_run: bool) -> int:
                 LOGGER.info("Using cached SUF mentions (document unchanged)")
                 family_outputs["suf"] = {"stored": [], "mentions": cached}
             else:
-                LOGGER.info("No SUF mentions cache — re-parsing existing PDFs")
-                existing_suf_pdfs = list(config.suf_dir.rglob("*.pdf"))
-                if existing_suf_pdfs:
+                LOGGER.info("No SUF mentions cache — re-parsing the LATEST SUF edition")
+                latest = latest_suf_edition(config.suf_dir, config.sharepoint_sync_root, config.sharepoint_base_url)
+                latest_pdfs = [f.local_path for f in latest.files if f.local_path.suffix.lower() == ".pdf"] if latest else []
+                if latest_pdfs:
                     family_outputs["suf"] = process_pdf_family(
-                        family="suf", files=existing_suf_pdfs, warnings=warnings, dry_run=dry_run
+                        family="suf", files=latest_pdfs, warnings=warnings, dry_run=dry_run
                     )
                     state.save_mentions("suf", family_outputs["suf"]["mentions"])
         elif suf_path:
@@ -413,7 +453,7 @@ def run(dry_run: bool) -> int:
         relevant_rrs = build_relevant_rrs(open_rrs, mentioned)
     else:
         LOGGER.info("No changes detected — reusing last known relevant RRs")
-        relevant_rrs = _load_latest_relevant_rrs(config.reports_dir)
+        relevant_rrs = state.load_relevant_rrs() or _load_latest_relevant_rrs(config.reports_dir)
     reports = [] if dry_run else process_recommendation_reports(
         relevant_rrs=relevant_rrs,
         client=client,
@@ -448,6 +488,10 @@ def run(dry_run: bool) -> int:
     if not dry_run:
         report_path.write_text(json.dumps(run_summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         relevant_path.write_text(json.dumps(relevant_rrs, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        if relevant_rrs:
+            # Carry the cross-reference in the shared store so `report` (and
+            # runs on other machines) reuse it without walking local files.
+            state.save_relevant_rrs(relevant_rrs)
         state.append_run({"run_id": run_id, "report_path": str(report_path), "relevant_count": len(relevant_rrs)})
         state.save()
     else:
@@ -486,6 +530,25 @@ def _edition_documents(edition: SourceEdition, warnings: list[str]) -> list[Docu
             )
         )
     return documents
+
+
+def _latest_rr_docx_files(root: Path) -> list[str]:
+    """Newest revision of each RR docx under ``root``.
+
+    Re-published RRs are stored as append-only dated revisions
+    ("RR773 Recommendation Report.rev-20260714.docx") next to the untouched
+    original. Analyses must read exactly one file per RR — the newest one.
+    Revision suffixes sort lexicographically (ISO dates), and any original
+    without revisions is its own newest version.
+    """
+    latest: dict[str, Path] = {}
+    for path in root.rglob("*.docx"):
+        base = re.sub(r"\.rev-\d{8}$", "", path.stem)
+        key = f"{path.parent}|{base}"
+        current = latest.get(key)
+        if current is None or path.stem > current.stem:
+            latest[key] = path
+    return [str(p) for p in sorted(latest.values())]
 
 
 def _load_latest_relevant_rrs(reports_dir: Path) -> list[dict[str, Any]]:
@@ -551,6 +614,7 @@ def build_market_changes_html(
         generated=datetime.now().strftime("%B %d, %Y"),
         cuf_url=cuf_url,
         suf_url=suf_url,
+        routing_file=config.area_routing_file,
     )
     html = render_report(report)
 
@@ -602,7 +666,9 @@ def generate_report() -> int:
     warnings: list[str] = []
 
     run_id = datetime.now().strftime("%Y%m%d-%H%M%S")
-    relevant_rrs = _load_latest_relevant_rrs(config.reports_dir)
+    # Prefer the shared store (works across machines); fall back to local files.
+    state = MetadataStore(config.state_file, legacy_path=Path("data/state/metadata.json"))
+    relevant_rrs = state.load_relevant_rrs() or _load_latest_relevant_rrs(config.reports_dir)
     html_path, report_url = build_market_changes_html(config, warnings, run_id, relevant_rrs)
     if html_path is None:
         raise RuntimeError("No CUF or SUF materials found in the synced SharePoint folders")
@@ -623,8 +689,16 @@ def generate_report() -> int:
     return 0
 
 
+def _rr_number_of_path(path: str) -> str:
+    """RR digits from a cached docx path (rr728/RR728 Recommendation Report...)."""
+    match = re.search(r"rr\s?0*(\d{2,5})", Path(path).parent.name, re.IGNORECASE) or \
+        re.search(r"RR\s?0*(\d{2,5})", Path(path).name, re.IGNORECASE)
+    return match.group(1) if match else ""
+
+
 def generate_settlement_report(
-    *, files: list[str] | None, links: str | None, out: str | None, call_claude: bool
+    *, files: list[str] | None, links: str | None, out: str | None, call_claude: bool,
+    process_all: bool = False, write_stories: bool = False,
 ) -> int:
     """Produce SPP_RR_Report_Summary.xlsx: RR docx -> charge-type stories for settlement devs.
 
@@ -636,23 +710,58 @@ def generate_settlement_report(
     ensure_runtime_dirs(config)
     setup_logging(config.logs_dir, config.logging_level)
 
-    # No --files/--links given: default to whatever main.py run has already
-    # pulled into recommendation_reports_dir (see process_recommendation_reports
-    # above), so the two pipelines can share the same local RR docx cache.
+    state = MetadataStore(config.state_file, legacy_path=Path("data/state/metadata.json"))
+    relevant = state.load_relevant_rrs() or _load_latest_relevant_rrs(config.reports_dir)
+
+    # No --files/--links given: process the RRs from the CURRENT relevant list
+    # (latest CUF/SUF cross-reference) that the ledger hasn't seen at this
+    # content version yet — already-processed RRs keep their existing outputs
+    # and are skipped. --all overrides both filters (full re-run over the cache).
+    analysis_records: list[tuple[str, str]] = []  # (rr_key, input_hash) to record on success
     if not files and not links:
-        files = [str(p) for p in config.recommendation_reports_dir.rglob("*.docx")]
-        if not files:
+        candidates = _latest_rr_docx_files(config.recommendation_reports_dir)
+        if not candidates:
             raise RuntimeError(
                 f"No RR .docx files in {config.recommendation_reports_dir} and no "
                 "--files/--links given. Run `python main.py run` first, or pass one explicitly."
             )
-        LOGGER.info("Defaulting to %d RR docx file(s) from %s", len(files), config.recommendation_reports_dir)
+        relevant_nums = {str(rr.get("rr_number")) for rr in relevant}
+        files = []
+        for path in candidates:
+            rr_num = _rr_number_of_path(path)
+            if not process_all and relevant_nums and rr_num not in relevant_nums:
+                LOGGER.info("RR%s: not in the latest CUF/SUF relevant list — skipped (use --all to include)", rr_num or "?")
+                continue
+            input_hash = sha256_file(Path(path))
+            ledger = state.check_analysis("settlement_report", f"RR{rr_num}", input_hash)
+            if not process_all and ledger == "unchanged":
+                LOGGER.info("RR%s: already processed at this content version — skipped (use --all to include)", rr_num)
+                continue
+            if ledger == "updated":
+                LOGGER.info("RR%s: content changed since last processing — re-analyzing (UPDATE)", rr_num)
+            files.append(path)
+            analysis_records.append((f"RR{rr_num}", input_hash))
+        if not files:
+            LOGGER.info("Nothing new to process — all relevant RRs are already in the ledger. Use --all to regenerate.")
+            return 0
+        LOGGER.info("Processing %d new/updated RR docx file(s)", len(files))
 
     run_id = datetime.now().strftime("%Y%m%d-%H%M%S")
     out_path = out or str(config.settlement_reports_dir / f"SPP_RR_Report_Summary-{run_id}.xlsx")
 
+    # RR -> market initiative comes from the run pipeline's CUF/SUF
+    # cross-reference (the slide names the initiative; the RR docx doesn't).
+    initiatives = {
+        str(rr.get("rr_number")): {
+            "label": rr.get("market_initiative", ""),
+            "citation": rr.get("market_initiative_citation", ""),
+        }
+        for rr in relevant
+        if rr.get("market_initiative")
+    }
+
     engine = build_engine(config.report_engine, binary=config.claude_code_binary, model=config.report_model) if call_claude else None
-    settlement_pipeline.run(
+    _, results = settlement_pipeline.run(
         files=files,
         links=settlement_pipeline.read_links_file(links) if links else None,
         out_path=out_path,
@@ -660,8 +769,43 @@ def generate_settlement_report(
         tenant=config.sharepoint_tenant_id,
         client_id=config.sharepoint_client_id,
         client_secret=config.sharepoint_client_secret,
+        initiatives=initiatives,
+        # Stories cross-link the RR to the synced Protocols/SUG copy.
+        protocols_url=to_sharepoint_url(config.protocols_dir, config.sharepoint_sync_root, config.sharepoint_base_url),
     )
     LOGGER.info("Settlement report written: %s", out_path)
+
+    # Record what was processed at which content version, so the next run
+    # skips these RRs until SPP re-publishes them (UPDATE detection).
+    for rr_key, input_hash in analysis_records:
+        state.record_analysis("settlement_report", rr_key, input_hash, {"report": out_path})
+    if analysis_records:
+        state.save()
+
+    # Story workbooks are PAUSED by default (Elizabeth, 2026-07-15) until the
+    # RR728 story quality passes review — one combined report is the output.
+    # --stories re-enables per-RR workbook generation.
+    if write_stories:
+        written = 0
+        for res in results:
+            rows = jira_template_writer.stories_from_results([res])
+            if not rows:
+                continue  # TARIFF_GOVERNANCE etc. — no story content for this RR
+            rr_id = str(res["report"].get("rr_id", "RR")).replace(" ", "")
+            jira_out = config.jira_stories_dir / f"{rr_id}_Jira_Stories-{run_id}.xlsx"
+            jira_template_writer.write_story_workbook(config.jira_template_file, jira_out, rows)
+            written += 1
+            LOGGER.info("Story workbook written for %s: %s", rr_id, jira_out.name)
+        if written:
+            folder_url = to_sharepoint_url(config.jira_stories_dir, config.sharepoint_sync_root, config.sharepoint_base_url)
+            send_slack_report_link(
+                f"SPPIM settlement Jira story drafts ({written} RRs) — PM review needed ({datetime.now().strftime('%B %d, %Y')})",
+                folder_url,
+                webhook_url=config.slack_webhook_url,
+                bot_token=config.slack_bot_token,
+                channel=config.slack_channel,
+                note="" if folder_url else "Workbooks written locally; no SharePoint link available.",
+            )
     return 0
 
 
@@ -684,17 +828,52 @@ def parse_args() -> argparse.Namespace:
         "--call-claude", action="store_true",
         help="Invoke the LLM to generate Jira stories for SETTLEMENT_CALC + PASS RRs (omit for a classification-only triage pass)",
     )
+    settlement_parser.add_argument(
+        "--all", action="store_true", dest="process_all",
+        help="Process every cached RR docx, ignoring the relevant list and the already-processed ledger",
+    )
+    settlement_parser.add_argument(
+        "--stories", action="store_true", dest="write_stories",
+        help="Also write per-RR Jira story workbooks (paused by default pending story-quality review)",
+    )
     return parser.parse_args()
+
+
+def _notify_failure(step: str, exc: BaseException) -> None:
+    """Post a failure alert to Slack; never let the alert itself raise.
+
+    Scheduled tasks fail silently otherwise — the scheduler logs an exit code
+    nobody reads, and the team only notices when reports stop arriving.
+    """
+    try:
+        config = load_config()
+        send_slack_failure(
+            step,
+            f"{type(exc).__name__}: {exc}",
+            webhook_url=config.slack_webhook_url,
+            bot_token=config.slack_bot_token,
+            channel=config.slack_channel,
+        )
+    except Exception:  # config itself may be what's broken
+        LOGGER.exception("Could not send the Slack failure notification")
 
 
 def main() -> int:
     args = parse_args()
-    if args.command == "run":
-        return run(dry_run=args.dry_run)
-    if args.command == "report":
-        return generate_report()
-    if args.command == "settlement-report":
-        return generate_settlement_report(files=args.files, links=args.links, out=args.out, call_claude=args.call_claude)
+    try:
+        if args.command == "run":
+            return run(dry_run=args.dry_run)
+        if args.command == "report":
+            return generate_report()
+        if args.command == "settlement-report":
+            return generate_settlement_report(
+                files=args.files, links=args.links, out=args.out, call_claude=args.call_claude,
+                process_all=args.process_all, write_stories=args.write_stories,
+            )
+    except Exception as exc:
+        LOGGER.exception("Command '%s' failed", args.command)
+        _notify_failure(args.command, exc)
+        raise
     raise ValueError(f"Unsupported command: {args.command}")
 
 

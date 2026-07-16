@@ -29,7 +29,8 @@ CLASS_STYLE={
  "SETTLEMENT_RELEVANT":("FAEEDA","633806","Manual review — settlement impact in Tariff prose"),
  "TARIFF_GOVERNANCE":("F1EFE8","444441","Out of scope for calc stories"),
 }
-STATUS_STYLE={"PASS":("C0DD97","27500A"),"REVIEW_SETTLEMENT_PROSE":("FAC775","633806"),
+STATUS_STYLE={"PASS":("C0DD97","27500A"),"PASS_NUMBERING_MAPPED":("C0DD97","27500A"),
+ "REVIEW_SETTLEMENT_PROSE":("FAC775","633806"),
  "NO_CHARGE_CODES":("F1EFE8","444441"),"HARD_FAIL":("F7C1C1","791F1F")}
 CT_STATUS={"ADDED":("C0DD97","27500A"),"MODIFIED":("FAC775","633806")}
 
@@ -56,13 +57,22 @@ def build(results, out_path):
         d=res["report"]; cls=d["rr_class"]; status=d["reconciliation"]["status"]
         rr=d.get("rr_id","?"); title=d.get("rr_title","") or ""
         url=d.get("sharepoint_url") or ""
+        # Only Market Protocols (a.k.a. Settlement User Guide) sections matter to
+        # the settlement team — Tariff/Planning Criteria/etc. are not listed.
         mp=[i for i in d["charge_type_index"] if i["banner"].startswith("Market")]
         secs="\n".join(f"§{i['section']} {i['title'][:28]} (p.{i.get('page','?')})" for i in mp) if mp else \
              ("— (prose change)" if cls=="SETTLEMENT_RELEVANT" else "— (none)")
+        ver=d.get("protocol_version","")
+        if ver: secs=f"Settlement User Guide v{ver}\n{secs}"
         pages=sorted({i.get("page") for i in mp if i.get("page")})
         cite=f"{rr} Recommendation Report" + (f", pp. {', '.join(map(str,pages))}" if pages else f", {d.get('total_pages','?')} pp.")
         cbg,cfg,_=CLASS_STYLE.get(cls,("F1EFE8","444441","")); sbg,sfg=STATUS_STYLE.get(status,("F1EFE8","444441"))
-        vals=[rr,title,cls.replace("_"," ").title(),status.replace("_"," ").title(),secs,cite,url,d.get("market_initiative","")]
+        # Initiative is the VERBATIM slide wording; the citation line under it
+        # names the file/page so the claim is checkable against the slide.
+        initiative=d.get("market_initiative","")
+        if initiative and d.get("market_initiative_citation"):
+            initiative=f"{initiative}\n({d['market_initiative_citation']})"
+        vals=[rr,title,cls.replace("_"," ").title(),status.replace("_"," ").title(),secs,cite,url,initiative]
         for ci,val in enumerate(vals,1):
             c=ws.cell(row=r,column=ci,value=val); c.border=_bd(); c.font=Font(name="Arial",size=9); c.alignment=_W()
             if ci==1: c.font=Font(name="Arial",size=9,bold=True,color="185FA5"); c.alignment=_C()

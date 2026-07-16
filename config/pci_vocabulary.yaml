@@ -1,0 +1,25 @@
+# PCI settlement vocabulary — SME-maintained (Elizabeth / Kashmita).
+# When this file has content, it is injected verbatim into the story-writer
+# prompt so stories speak the team's language instead of raw SPP wording.
+# Keep it small and precise: every line here steers every story.
+#
+# Everything below is COMMENTED OUT until reviewed — uncomment/fill to activate.
+
+# conventions:
+#   - 'Adding a determinant that sums or transforms another quantity is phrased:
+#      "Add calculation class for <determinant> and use the math below for shadow
+#      calculation".'
+#   - 'A determinant whose value is taken directly from the SPP statement is
+#      phrased: "Add calculation class for <determinant> and copy value from
+#      statement".'
+#   - '5-minute quantities that feed hourly roll-ups are rounded to 3 decimal
+#      places — state "Round the value to 3 Decimal Places" on those items.'
+
+# determinant_terms:
+#   # SPP determinant (as in the RR)  ->  PCI calculation class / preferred name
+#   # "#RtNetSlIncDev5minQty": "RtNetSlIncDev5minQty"
+#   # "RtSlPosDev5minFct": "RtSlPosDev5minFct"
+
+# story_phrasing:
+#   summary_prefix: "[SPPIM: Back Office: Settlements]"
+#   # e.g. 'Update Calculation to Support <initiative>' for initiative-wide stories

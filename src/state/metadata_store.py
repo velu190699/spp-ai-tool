@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 import json
+import logging
+import os
+import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -15,14 +20,39 @@ class DocumentCheck:
 
 
 class MetadataStore:
-    def __init__(self, path: Path) -> None:
+    """JSON ledger of every document the tool has seen and every analysis it ran.
+
+    The store lives in the synced SharePoint folder (see config.yaml
+    ``state_file``) so any machine that runs the tool — a teammate's laptop
+    today, a VM later — continues from the same state instead of reprocessing
+    everything. It is the tool's memory across runs:
+
+    - ``documents``: what was downloaded, from where, with which content hash.
+    - ``analyses``: which outputs were produced from which document version,
+      so a re-published document (new hash) is re-analyzed and flagged as an
+      UPDATE instead of silently skipped or silently overwritten.
+    - ``relevant_rrs``: the last computed cross-reference, carried forward on
+      no-change runs and shared across machines.
+    - ``mentions_cache`` / ``runs``: parse cache and run audit trail.
+    """
+
+    def __init__(self, path: Path, legacy_path: Path | None = None) -> None:
         self.path = path
+        self.legacy_path = legacy_path
         self.data = self._load()
 
     def _load(self) -> dict[str, Any]:
-        if not self.path.exists():
+        # One-time migration: older versions kept state repo-local
+        # (data/state/metadata.json). If the shared file doesn't exist yet but
+        # the legacy one does, start from the legacy content; the next save()
+        # writes it to the shared location.
+        source = self.path
+        if not source.exists() and self.legacy_path and self.legacy_path.exists():
+            LOGGER.info("Migrating state from legacy %s to %s", self.legacy_path, self.path)
+            source = self.legacy_path
+        if not source.exists():
             return {"documents": {}, "runs": []}
-        with self.path.open("r", encoding="utf-8") as handle:
+        with source.open("r", encoding="utf-8") as handle:
             return json.load(handle)
 
     @staticmethod
@@ -50,6 +80,55 @@ class MetadataStore:
         path = Path(existing["local_path"])
         return path if path.exists() else None
 
+    # ------------------------------------------------------------------
+    # Analysis ledger: which outputs were produced from which input version.
+    # ------------------------------------------------------------------
+
+    def check_analysis(self, kind: str, key: str, input_hash: str) -> str:
+        """Has ``kind`` already been run for ``key`` at this input version?
+
+        Returns ``"new"`` (never analyzed), ``"unchanged"`` (analyzed at this
+        exact input hash — safe to skip), or ``"updated"`` (analyzed before,
+        but the input has changed since — re-analyze and flag as an UPDATE).
+        """
+        existing = self.data.setdefault("analyses", {}).get(f"{kind}|{key}")
+        if not existing:
+            return "new"
+        return "unchanged" if existing.get("input_hash") == input_hash else "updated"
+
+    def record_analysis(self, kind: str, key: str, input_hash: str, outputs: dict[str, Any] | None = None) -> None:
+        now = datetime.now(timezone.utc).isoformat()
+        entry_key = f"{kind}|{key}"
+        previous = self.data.setdefault("analyses", {}).get(entry_key, {})
+        history = previous.get("history", [])
+        if previous and previous.get("input_hash") != input_hash:
+            # Keep a compact trail of superseded versions for auditability.
+            history = history + [{"input_hash": previous.get("input_hash"), "analyzed_at": previous.get("analyzed_at")}]
+        self.data["analyses"][entry_key] = {
+            "kind": kind,
+            "key": key,
+            "input_hash": input_hash,
+            "analyzed_at": now,
+            "outputs": outputs or {},
+            "history": history,
+        }
+
+    # ------------------------------------------------------------------
+    # Relevant-RRs carry-forward (shared across machines via the store).
+    # ------------------------------------------------------------------
+
+    def save_relevant_rrs(self, relevant_rrs: list[dict[str, Any]]) -> None:
+        self.data["relevant_rrs"] = {
+            "saved_at": datetime.now(timezone.utc).isoformat(),
+            "items": relevant_rrs,
+        }
+
+    def load_relevant_rrs(self) -> list[dict[str, Any]] | None:
+        entry = self.data.get("relevant_rrs")
+        if not entry:
+            return None
+        return entry.get("items") or None
+
     def save_mentions(self, family: str, mentions: dict[str, Any]) -> None:
         self.data.setdefault("mentions_cache", {})[family] = mentions
 
@@ -60,7 +139,18 @@ class MetadataStore:
         self.data.setdefault("runs", []).append(run_summary)
 
     def save(self) -> None:
+        # Atomic write (temp file + rename): the store lives in a OneDrive-synced
+        # folder, and a partially-written JSON there would sync as corruption.
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self.path.open("w", encoding="utf-8") as handle:
-            json.dump(self.data, handle, indent=2, sort_keys=True)
-            handle.write("\n")
+        fd, temp_name = tempfile.mkstemp(dir=self.path.parent, prefix=self.path.name, suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                json.dump(self.data, handle, indent=2, sort_keys=True)
+                handle.write("\n")
+            os.replace(temp_name, self.path)
+        except BaseException:
+            try:
+                os.unlink(temp_name)
+            except OSError:
+                pass
+            raise

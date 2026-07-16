@@ -32,9 +32,12 @@ class AppConfig:
     recommendation_reports_dir: Path
     rr_master_list_dir: Path
     state_file: Path
+    area_routing_file: Path
     reports_dir: Path
     published_reports_dir: Path
     settlement_reports_dir: Path
+    jira_template_file: Path
+    jira_stories_dir: Path
     logs_dir: Path
     logging_level: str
     sharepoint_base_url: str
@@ -76,12 +79,17 @@ def load_config(path: str = "config.yaml") -> AppConfig:
         recommendation_reports_dir=_expand_path(paths.get("recommendation_reports_dir", "data/Recommendation_Reports")),
         rr_master_list_dir=_expand_path(paths.get("rr_master_list_dir", "data/RR_Master_List")),
         state_file=_expand_path(paths.get("state_file", "data/state/metadata.json")),
+        # SME-editable area->topic routing for the summary report (P0-1). Kept
+        # in a YAML so Kashmita's corrections land without a code change.
+        area_routing_file=_expand_path(paths.get("area_routing_file", "config/area_routing.yaml")),
         reports_dir=_expand_path(paths.get("reports_dir", "data/reports")),
         # Where the final HTML report is published. Defaults to reports_dir so
         # runs without this key keep their old behavior; set it to the synced
         # SharePoint "Reports" folder to publish there.
         published_reports_dir=_expand_path(paths.get("published_reports_dir", paths.get("reports_dir", "data/reports"))),
         settlement_reports_dir=_expand_path(paths.get("settlement_reports_dir", "data/reports/settlement")),
+        jira_template_file=_expand_path(paths.get("jira_template_file", "templates/Jira_Story_Creator_template.xlsx")),
+        jira_stories_dir=_expand_path(paths.get("jira_stories_dir", "data/reports/jira_stories")),
         logs_dir=_expand_path(paths.get("logs_dir", "logs")),
         logging_level=str(logging.get("level", "INFO")).upper(),
         sharepoint_base_url=str(sharepoint.get("base_url", "")).rstrip("/"),
@@ -117,6 +125,7 @@ def ensure_runtime_dirs(config: AppConfig) -> None:
         config.reports_dir,
         config.published_reports_dir,
         config.settlement_reports_dir,
+        config.jira_stories_dir,
         config.logs_dir,
     ):
         directory.mkdir(parents=True, exist_ok=True)
