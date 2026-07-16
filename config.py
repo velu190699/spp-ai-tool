@@ -36,6 +36,7 @@ class AppConfig:
     reports_dir: Path
     published_reports_dir: Path
     settlement_reports_dir: Path
+    published_settlement_reports_dir: Path
     jira_template_file: Path
     jira_stories_dir: Path
     logs_dir: Path
@@ -88,6 +89,14 @@ def load_config(path: str = "config.yaml") -> AppConfig:
         # SharePoint "Reports" folder to publish there.
         published_reports_dir=_expand_path(paths.get("published_reports_dir", paths.get("reports_dir", "data/reports"))),
         settlement_reports_dir=_expand_path(paths.get("settlement_reports_dir", "data/reports/settlement")),
+        # Where the final settlement xlsx is published (synced SharePoint folder).
+        # Working artifacts (stories JSON, images, rendered PDFs) STAY in
+        # settlement_reports_dir — only the report itself is copied out, so the
+        # team's folder never collects pipeline internals. Defaults to
+        # settlement_reports_dir so runs without this key keep their old behavior.
+        published_settlement_reports_dir=_expand_path(
+            paths.get("published_settlement_reports_dir",
+                      paths.get("settlement_reports_dir", "data/reports/settlement"))),
         jira_template_file=_expand_path(paths.get("jira_template_file", "templates/Jira_Story_Creator_template.xlsx")),
         jira_stories_dir=_expand_path(paths.get("jira_stories_dir", "data/reports/jira_stories")),
         logs_dir=_expand_path(paths.get("logs_dir", "logs")),
@@ -125,6 +134,7 @@ def ensure_runtime_dirs(config: AppConfig) -> None:
         config.reports_dir,
         config.published_reports_dir,
         config.settlement_reports_dir,
+        config.published_settlement_reports_dir,
         config.jira_stories_dir,
         config.logs_dir,
     ):

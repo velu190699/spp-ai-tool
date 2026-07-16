@@ -4,6 +4,7 @@ import argparse
 import json
 import logging
 import re
+import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -771,14 +772,23 @@ def generate_settlement_report(
         client_secret=config.sharepoint_client_secret,
         initiatives=initiatives,
         # Stories cross-link the RR to the synced Protocols/SUG copy.
-        protocols_url=to_sharepoint_url(config.protocols_dir, config.sharepoint_sync_root, config.sharepoint_base_url),
+        protocols_url=to_sharepoint_url(config.protocols_dir, config.sharepoint_sync_root, config.sharepoint_base_url, is_folder=True),
     )
     LOGGER.info("Settlement report written: %s", out_path)
+
+    # Publish the finished xlsx to the synced SharePoint folder (the working
+    # artifacts — stories JSON, images, rendered PDFs — stay in the local
+    # settlement_reports_dir; the team only sees the report itself).
+    published_path = out_path
+    if config.published_settlement_reports_dir.resolve() != Path(out_path).parent.resolve():
+        published_path = str(config.published_settlement_reports_dir / Path(out_path).name)
+        shutil.copy2(out_path, published_path)
+        LOGGER.info("Settlement report published: %s", published_path)
 
     # Record what was processed at which content version, so the next run
     # skips these RRs until SPP re-publishes them (UPDATE detection).
     for rr_key, input_hash in analysis_records:
-        state.record_analysis("settlement_report", rr_key, input_hash, {"report": out_path})
+        state.record_analysis("settlement_report", rr_key, input_hash, {"report": published_path})
     if analysis_records:
         state.save()
 
@@ -797,7 +807,7 @@ def generate_settlement_report(
             written += 1
             LOGGER.info("Story workbook written for %s: %s", rr_id, jira_out.name)
         if written:
-            folder_url = to_sharepoint_url(config.jira_stories_dir, config.sharepoint_sync_root, config.sharepoint_base_url)
+            folder_url = to_sharepoint_url(config.jira_stories_dir, config.sharepoint_sync_root, config.sharepoint_base_url, is_folder=True)
             send_slack_report_link(
                 f"SPPIM settlement Jira story drafts ({written} RRs) — PM review needed ({datetime.now().strftime('%B %d, %Y')})",
                 folder_url,

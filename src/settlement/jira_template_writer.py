@@ -25,6 +25,7 @@ from openpyxl import load_workbook
 LOGGER = logging.getLogger(__name__)
 
 STORIES_SHEET = "Jira Stories"
+TESTS_SHEET = "Tests"
 SUMMARY_PREFIX = "[SPPIM: Back Office: Settlements]"
 
 # Header text -> StoryRow attribute. Green columns are deliberately absent.
@@ -85,12 +86,19 @@ def write_story_workbook(template_path: Path, out_path: Path, rows: list[StoryRo
     """Fill a copy of the template with `rows` and save it to `out_path`.
 
     The template file itself is never modified. Formatting, data validation,
-    the Tests sheet, and the green sync columns are preserved untouched so
-    Miquel's app sees exactly the workbook shape it expects.
+    the Tests sheet's banner/header, and the green sync columns are preserved
+    untouched so Miquel's app sees exactly the workbook shape it expects. The
+    Tests sheet's shipped EXAMPLE rows are removed — we don't author tests, so
+    the tab ships blank below its header (Elizabeth/Eduardo, 2026-07-16).
     """
     wb = load_workbook(template_path)
     if STORIES_SHEET not in wb.sheetnames:
         raise ValueError(f"Template has no '{STORIES_SHEET}' sheet (found: {wb.sheetnames})")
+    if TESTS_SHEET in wb.sheetnames:
+        tests = wb[TESTS_SHEET]
+        tests_header = _find_header_row(tests)
+        if tests.max_row > tests_header:
+            tests.delete_rows(tests_header + 1, tests.max_row - tests_header)
     ws = wb[STORIES_SHEET]
     header_row = _find_header_row(ws)
     columns = {

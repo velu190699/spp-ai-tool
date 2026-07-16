@@ -43,6 +43,7 @@ import json
 import logging
 import os
 import pathlib
+import re
 import tempfile
 from typing import Any
 
@@ -99,6 +100,8 @@ def call_llm(engine: ReportEngine, marked: str, report: dict, url: str | None) -
     """Only for SETTLEMENT_CALC + PASS. Feeds the extraction prompt + marked text
     + charge-type index (the mandatory checklist) to the configured LLM engine."""
     instruction = PROMPT_PATH.read_text(encoding="utf-8")
+    version_match = re.match(r"PROMPT_VERSION:\s*(\S+)", instruction)
+    prompt_version = version_match.group(1) if version_match else "unversioned"
     # Stories are scoped to the Market Protocols / Settlement User Guide
     # sections ONLY (the ones with formulas + determinants) — Tariff and other
     # documents are context, never story items (Elizabeth, 2026-07-15).
@@ -124,10 +127,18 @@ def call_llm(engine: ReportEngine, marked: str, report: dict, url: str | None) -
                + f"CHARGE_TYPE_CHECKLIST (one story per entry; Market Protocols/SUG only): {checklist}\n\n"
                f"=== RR DOCUMENT (equations + redlines preserved) ===\n{marked}")
     try:
-        return engine.generate(instruction, context)
+        stories = engine.generate(instruction, context)
     except Exception as exc:  # engine already raises a typed EngineError; keep the pipeline going
         LOGGER.warning("LLM story generation failed for %s: %s", report.get("rr_id"), exc)
         return {"stories": [], "warning": f"LLM call failed: {exc}"}
+    # Reproducibility: every persisted story set records which prompt produced it.
+    if isinstance(stories, dict):
+        stories["prompt_version"] = prompt_version
+        n_stories = len(stories.get("jira_stories") or [])
+        if n_stories > 1:  # ONE STORY PER RR is a prompt hard rule (Eduardo, 2026-07-16)
+            LOGGER.warning("[%s] prompt contract violated: %d stories returned, expected 1",
+                           report.get("rr_id"), n_stories)
+    return stories
 
 
 def process_one(

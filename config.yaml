@@ -17,8 +17,15 @@ paths:
   # Final HTML report is published here (synced SharePoint "Reports" folder).
   # Market-specific subfolder: the tool is expected to expand beyond SPPIM.
   published_reports_dir: "${SPP_SYNC_ROOT}/Reports/SPPIM"
-  # SPP_RR_Report_Summary-<timestamp>.xlsx (settlement Jira report) is written here.
+  # SPP_RR_Report_Summary-<timestamp>.xlsx (settlement Jira report) is BUILT here,
+  # along with the pipeline's working artifacts (stories JSON, formula images,
+  # rendered PDFs) — these internals never leave the repo.
   settlement_reports_dir: data/reports/settlement
+  # The finished settlement report xlsx is COPIED here for the team (synced
+  # SharePoint folder). Both Excel outputs — this report and the Jira story
+  # workbooks — live in "Story templates"; the Reports folder is HTML-only
+  # (Eduardo, 2026-07-16).
+  published_settlement_reports_dir: "${SPP_SYNC_ROOT}/Story templates/SPPIM"
   # Miquel's Jira story workbook: the blank template the writer fills, and the
   # synced folder where filled story workbooks are published for PM review
   # (per-market subfolder, same reasoning as published_reports_dir).

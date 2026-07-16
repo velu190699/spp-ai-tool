@@ -109,7 +109,15 @@ def test_write_story_workbook_respects_template_contract(tmp_path):
     for green in ("Jira Key", "Sync Status", "Sync Timestamp", "Sync Error"):
         assert ws.cell(row=5, column=headers[green]).value is None
 
-    # The Tests sheet survives intact.
+    # The Tests sheet survives, but its shipped example rows are removed —
+    # we don't author tests, so the tab is blank below its header.
     assert "Tests" in wb.sheetnames
+    tests_ws = wb["Tests"]
+    tests_header = next(
+        row for row in range(1, tests_ws.max_row + 1)
+        if str(tests_ws.cell(row=row, column=1).value or "").strip() == "Create?"
+    )
+    assert tests_ws.max_row == tests_header
     # The source template still has its example rows (we filled a copy).
     assert load_workbook(TEMPLATE)["Jira Stories"].max_row > 4
+    assert load_workbook(TEMPLATE)["Tests"].max_row > 4
