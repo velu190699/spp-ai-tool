@@ -316,6 +316,11 @@ def _starts_next_header(lines, k, det_key, page_cap):
     return False
 
 
+def _bracket_delta(text):
+    """Net open brackets on a line: count of ``([{`` minus ``)]}``."""
+    return (sum(text.count(c) for c in "([{") - sum(text.count(c) for c in ")]}"))
+
+
 def _block_lines(lines, start_pos, det_key):
     """Indices of the lines that make up determinant `det_key`'s formula.
 
@@ -326,31 +331,45 @@ def _block_lines(lines, start_pos, det_key):
     IF/THEN header of the NEXT determinant, or the page cap; drops blank lines,
     page numbers, and OLE fragments; and jumps over a footnote when the formula
     resumes after it.
+
+    A different determinant (or a next-item header) only ends the block at the
+    TOP level — when the running bracket depth is 0. Inside an unclosed
+    ``([{`` we are mid-expression, so a "def"-looking line there is an artifact,
+    not a new determinant: a redline that glued a struck token and its inserted
+    replacement into one name ending in a subscript ("… i = -1 )") reads as a
+    definition but is really the argument of an open MIN(/MAX[ (RR750
+    #RtAdjMtr5minQty). Gating the break on depth keeps the whole formula.
     """
     page_cap = lines[start_pos]["page"] + _MAX_BLOCK_PAGES - 1
     kept = _formula_header(lines, start_pos) + [start_pos]
+    depth = _bracket_delta(lines[start_pos]["text"])
     k = start_pos + 1
     while k < len(lines):
         ln = lines[k]
         if ln["page"] > page_cap or _GLOSSARY.match(ln["text"]):
             break
-        if ln["def"] and not _det_matches(ln["def"], det_key):
+        if depth <= 0 and ln["def"] and not _det_matches(ln["def"], det_key):
             break
-        if _starts_next_header(lines, k, det_key, page_cap):
+        if depth <= 0 and _starts_next_header(lines, k, det_key, page_cap):
             break  # the next sub-determinant's "(b.2.1) IF … THEN" header starts here
         if not ln["text"].strip() or _PAGE_NUMBER.match(ln["text"].strip()):
+            depth += _bracket_delta(ln["text"])
             k += 1
             continue
         if _is_prose(ln["text"]):
             resume = _resume_after_prose(lines, k, page_cap, det_key)
             if resume is None:
                 break
+            for j in range(k, resume):  # keep depth accurate across the skipped run
+                depth += _bracket_delta(lines[j]["text"])
             k = resume
             continue
         if _looks_like_formula(ln["text"]):
             kept.append(k)
+            depth += _bracket_delta(ln["text"])
             k += 1
             continue
+        depth += _bracket_delta(ln["text"])
         k += 1  # neither formula nor prose = an OLE/footnote fragment — skip
     return kept
 

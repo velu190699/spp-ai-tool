@@ -192,6 +192,38 @@ def test_block_keeps_own_if_then_else_below_definition():
     assert kept == [0, 1, 2, 3, 4, 5]  # whole conditional kept; IF not treated as a boundary
 
 
+def test_block_keeps_def_looking_line_inside_open_brackets():
+    # RR750 #RtAdjMtr5minQty: a redline glued a struck token and its inserted
+    # replacement into one name ending in a subscript ("... i = -1 )") INSIDE an
+    # open "MAX [( MIN (". It reads as a new determinant def but is mid-expression,
+    # so the walk must NOT stop there and lose the rest of the formula.
+    texts = [
+        ("#RtAdjMtr5minQty a, ml, i =", "RtAdjMtr5minQty"),
+        ("MAX [( MIN ( RtBaseLineHrlyQty a, ml(drl), h ,", None),
+        ("RtSE5minQtyaRtAdjMtr5minQtya, ml(drl), i = -1 )", "RtSE5minQtyaRtAdjMtr5minQtya"),
+        ("- RtAdjMtr5minQty a, ml(drl), i ) , 0 ] * (-1)", None),
+        ("ELSE", None),
+        ("#RtAdjMtr5minQty a, ml, i = 0", "RtAdjMtr5minQty"),
+    ]
+    lines = [{"page": 0, "top": 300 - i * 20, "bottom": 300 - i * 20 - 8,
+              "text": t, "def": d} for i, (t, d) in enumerate(texts)]
+    kept = S._block_lines(lines, 0, "rtadjmtr5minqty")
+    assert kept == [0, 1, 2, 3, 4, 5]  # glued def-looking line kept; whole formula survives
+
+
+def test_block_still_stops_at_a_real_next_determinant_at_top_level():
+    # Guard: a genuine different determinant at bracket depth 0 still ends the block.
+    texts = [
+        ("#RtFoo a, s = RtBar a, s + RtBaz a, s", "RtFoo"),
+        ("+ RtQux a, s", None),
+        ("RtOther a, s = RtA a, s * RtB a, s", "RtOther"),
+    ]
+    lines = [{"page": 0, "top": 300 - i * 20, "bottom": 300 - i * 20 - 8,
+              "text": t, "def": d} for i, (t, d) in enumerate(texts)]
+    kept = S._block_lines(lines, 0, "rtfoo")
+    assert kept == [0, 1]  # stops at the real next determinant
+
+
 def test_block_jumps_footnote_between_formula_halves():
     # Formula continues on the next page AFTER a page-foot footnote; the footnote
     # (and page number) are skipped, the page-2 continuation is kept, and the
