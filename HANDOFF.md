@@ -69,17 +69,22 @@ committed.** It implements Eduardo's 2026-07-17 feedback:
 Deps added: `pypdfium2==5.12.1` (in requirements.txt; used for the crops).
 `pypdf` and `pypdfium2` are installed on this laptop.
 
-**2026-07-20 crop + Slack refinements (also uncommitted, tested — 89 pytest):**
-- Rewrote `screenshots.py` block detection (heuristics validated against real
-  RR728 crops). A determinant's crop now = its whole formula: stops at `Where`,
-  includes IF/THEN/ELSE, prepends an `IF … THEN` header sitting above the def
-  line (`_formula_header`), jumps a footnote between a formula's two page-halves,
-  and drops prose/`(a.1) …` paragraphs. Two-part crops use `a`/`b` codes in both
-  the sheet caption AND the workbook description (`[RR728-02a] [RR728-02b]`).
-- Enriched the story-drafts Slack message (`notifier.format_story_drafts_message`
-  / `send_slack_story_drafts`): report link on top, then a per-RR link to each
-  RR's story-template workbook (Eduardo, 2026-07-20). Note: on a `--stories` run
-  the plain report-link message (always) AND this drafts message both fire.
+**2026-07-20 crop + Slack refinements (also uncommitted, tested — 93 pytest):**
+- Rewrote `screenshots.py` block detection. A determinant's crop = its whole
+  formula: stops at `Where` / a different def / prose; includes IF/THEN/ELSE;
+  prepends the `IF … THEN` header above the `<det> =` line (`_formula_header`,
+  handles labeled `(b.2.1) IF`, multi-line + page-crossing conditions, and
+  IF-with-no-THEN); jumps a footnote between page-halves; drops the `(a.1) …`
+  prose. `_text_defines` makes the text fallback match a real definition (not a
+  usage/glossary row). Two-part crops use `a`/`b` codes in the caption AND the
+  description (`[RR728-02a] [RR728-02b]`). **Crops reviewed + APPROVED by
+  Elizabeth 2026-07-20**; validated across RR728/RR623/RR748 (0 missing-IF, 0
+  over-extension). RR728 items 22/23/26 are image-only / defined-elsewhere → no
+  crop (expected).
+- Enriched the story-drafts Slack message (`notifier.send_slack_story_drafts`):
+  report link on top, then a per-RR link to each RR's story-template workbook.
+  Note: on a `--stories` run the plain report-link message (always) AND this
+  drafts message both fire — offered to unify to one; left as two for now.
 
 **Not yet verified end-to-end on a real RR** — the screenshot crop heuristics are
 new and geometry-based; a visual check on RR728 (`--call-claude --stories`) is the
@@ -124,14 +129,14 @@ natural next step before trusting the crops. Tunable constants live at the top o
 
 ## Immediate next steps
 
-1. **Commit the 2026-07-17 rework** — it is tested (77 passing) but uncommitted;
-   don't lose it. Include `screenshots.py`, and decide whether to track Miquel's
+1. **Commit the 2026-07-17 + 2026-07-20 rework** — tested (93 passing) but still
+   uncommitted; don't lose it. Includes `screenshots.py`, the enriched Slack
+   sender, and the SKILL/HANDOFF updates. Decide whether to track Miquel's
    `Story Creation Process_*.pdf` guide (recommended — it is the screenshot-sheet
    contract; consider a cleaner filename).
-2. **Visually verify the screenshots** on RR728 (`--call-claude --stories`) —
-   confirm each item's redline crop is complete (no clipped formula, no empty
-   continuation). Tune the constants in `screenshots.py` if a formula clips
-   (raise `_MAX_BLOCK_PAGES` or `_GAP_STOP_PTS`).
+2. ~~Visually verify the screenshots~~ **DONE** — crops reviewed and approved by
+   Elizabeth 2026-07-20 across RR728/RR623/RR748. Block-detection tunables are at
+   the top of `screenshots.py` if a future RR needs adjustment.
 3. **`config/pci_vocabulary.yaml`** — skeleton exists, all commented out.
    Elizabeth + Kashmita fill it ("add calculation class", "shadow calculation",
    "copy value from statement", 3-decimal rounding). Injected automatically when

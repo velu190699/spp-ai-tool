@@ -10,18 +10,29 @@ story call, whose behavior is pinned by the versioned prompt.
 
 ## Commands
 
-Incremental (only RRs on the current CUF/SUF relevant list not yet in the ledger):
+Full run — LLM stories + report xlsx + one Jira story workbook per RR (with the
+redline screenshot sheet). This is the normal "produce everything for the PM" run:
 
-    python main.py settlement-report --call-claude
+    python main.py settlement-report --call-claude --stories
 
-Specific RRs (bypasses the ledger):
+Incremental (default): processes only RRs on the current CUF/SUF relevant list not
+yet in the ledger; already-processed RRs keep their outputs and are skipped.
 
-    python main.py settlement-report --call-claude --files "<path to RR docx>" ...
+Specific RRs (bypasses the ledger — use when pointing at a docx directly):
 
-Flags: `--call-claude` = generate LLM stories (~6 min per RR, real cost; omit for a
-classification-only triage). `--stories` = also fill Miquel's Jira workbook template,
-one workbook per RR, into the synced "Story templates/SPPIM" folder (leave off until
-Elizabeth's signoff). `--all` = full re-run over the cache.
+    python main.py settlement-report --call-claude --stories --files "<path to RR docx>" ...
+
+Flags:
+- `--call-claude` — generate the LLM stories (~6 min per RR, real API cost). Omit
+  for a classification-only triage pass (no stories, no crops).
+- `--stories` — also write Miquel's Jira workbook per RR (with the screenshot
+  sheet) to the synced "Story templates/SPPIM" folder. Redline crops reviewed and
+  approved by Elizabeth 2026-07-20.
+- `--all` — full re-run over every cached RR, ignoring the ledger.
+- `--files` / `--links` — target specific RR docx files / a links file.
+
+Rebuilding the workbook + crops from an existing stories JSON (no `--call-claude`,
+no API cost) is fine — the crops and pages are deterministic from the markup PDF.
 
 ## Reproducibility contract
 
@@ -42,14 +53,26 @@ Elizabeth's signoff). `--all` = full re-run over the cache.
 - **Items mirror**: each story carries an `items` array (one entry per numbered
   description item: concise `action` + `determinant`, no formula). The report tab
   shows the full formula; the Jira workbook shows `<action> [RR<id>-NN] [p.X]`,
-  where the code matches the screenshot so Miquel's app inserts the image.
-- **Redline screenshots**: `screenshots.item_screenshots` crops the COMPLETE
-  formula per item from the markup PDF (bounded by the next definition / the
-  variable glossary / a blank gap); a formula that crosses a page break becomes
-  two images. Image-only (picture) formulas are skipped and logged.
+  where the code matches the screenshot so Miquel's app inserts the image. An item
+  whose formula spans two screenshots lists both codes (`[RR<id>-NNa] [RR<id>-NNb]`);
+  an item with no croppable formula shows no code.
+- **Redline screenshots** (`screenshots.item_screenshots`, markup-view PDF): crops
+  the COMPLETE formula per item — the whole `IF … THEN … ELSE …` (the IF/THEN
+  header sits ABOVE the `<det> =` line and is prepended; labeled/multi-line/
+  page-crossing conditions and IF-with-no-THEN all handled), stopping at the next
+  `Where`, a different determinant's definition, or prose. A formula that crosses
+  a page break becomes two images (`a`/`b`). Determinants that appear only as a
+  usage or in the glossary, or whose formula is image-only (MathType picture, name
+  not in the text), have no crop and are skipped + logged. Validated across the
+  cached RR728/RR623/RR748 (0 missing-IF, 0 over-extension). The block-detection
+  heuristics and their tunables live at the top of `screenshots.py`.
 - **Links**: `annotate_links` (pipeline) resolves the RR docx link (added to the
   description and the report's SharePoint column) and the CUF/SUF file named in
   the initiative citation (clickable in the report's Market Initiative cell).
+- **Notifications** (Slack, when configured): a report-published message on every
+  run; with `--stories`, a descriptive story-drafts message
+  (`notifier.send_slack_story_drafts`) with the report link on top and a link to
+  each RR's story-template workbook.
 - **PCI vocabulary**: `config/pci_vocabulary.yaml` is injected into the prompt when
   it has content (SME-maintained).
 
