@@ -124,6 +124,68 @@ def format_report_link_message(
     return {"text": fallback, "blocks": blocks}
 
 
+def format_story_drafts_message(
+    report_title: str,
+    report_url: str,
+    rr_links: list[tuple[str, str]],
+    note: str = "",
+) -> dict[str, Any]:
+    """Build the Slack payload announcing per-RR Jira story templates.
+
+    More descriptive than the plain report link (Eduardo, 2026-07-20): the
+    settlement report link on top, then one linked line per RR pointing at that
+    RR's story-template workbook, so a PM opens the exact template from Slack.
+    ``rr_links`` is [(rr_id, workbook_url), …]; a blank url falls back to the
+    bare RR id. ``note`` replaces the body with a status line (e.g. a failure).
+    """
+    n = len(rr_links)
+    header = f"*{report_title}*"
+    if note:
+        body = f"{header}\n:warning: {note}"
+    elif report_url:
+        body = f"{header}\n<{report_url}|Open the settlement report in SharePoint>"
+    else:
+        body = f"{header}\n_Report published locally; no SharePoint link available._"
+    blocks: list[dict[str, Any]] = [{"type": "section", "text": {"type": "mrkdwn", "text": body}}]
+
+    tmpl_lines = [f"*Story templates for PM review ({n} RR{'' if n == 1 else 's'})*"]
+    for rr, url in rr_links:
+        tmpl_lines.append(f"• <{url}|{rr} story template>" if url else f"• {rr} story template (no link)")
+    blocks.append({"type": "divider"})
+    blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": "\n".join(tmpl_lines)}})
+
+    rr_names = ", ".join(rr for rr, _ in rr_links)
+    fallback = f"{report_title} — templates: {rr_names}" if rr_links else report_title
+    return {"text": fallback, "blocks": blocks}
+
+
+def send_slack_story_drafts(
+    report_title: str,
+    report_url: str,
+    rr_links: list[tuple[str, str]],
+    *,
+    webhook_url: str = "",
+    bot_token: str = "",
+    channel: str = "",
+    note: str = "",
+) -> bool:
+    """Post the story-templates announcement (report link + per-RR template links).
+
+    Same delivery rules as ``send_slack_report_link``; never raises.
+    """
+    payload = format_story_drafts_message(report_title, report_url, rr_links, note)
+    if bot_token and channel:
+        ok = _post_via_bot(bot_token, channel, payload)
+    elif webhook_url:
+        ok = _post_via_webhook(webhook_url, payload)
+    else:
+        LOGGER.info("Slack not configured; story-drafts notification skipped")
+        return False
+    if ok:
+        LOGGER.info("Posted story-drafts notification to Slack (%d templates)", len(rr_links))
+    return ok
+
+
 def _post_via_webhook(webhook_url: str, payload: dict[str, Any]) -> bool:
     try:
         response = requests.post(webhook_url, json=payload, timeout=_SLACK_TIMEOUT_SECONDS)

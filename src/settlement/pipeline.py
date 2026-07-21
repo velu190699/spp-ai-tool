@@ -183,7 +183,100 @@ def process_one(
     stories = None
     if engine is not None and cls == "SETTLEMENT_CALC" and status in ("PASS", "PASS_NUMBERING_MAPPED"):
         stories = call_llm(engine, marked, report, url)
-    return {"report": report, "stories": stories}
+        if stories and images_root:
+            correct_item_pages(stories, report, docx_path,
+                               os.path.join(images_root, "..", "rendered"))
+    # docx_path rides along so downstream outputs (story-workbook screenshot
+    # tabs) can render the source document without re-deriving the file.
+    return {"report": report, "stories": stories, "docx_path": str(docx_path)}
+
+
+def correct_item_pages(stories: dict, report: dict, docx_path: str, cache_dir: str) -> dict:
+    """Rewrite each numbered item's [p.X] to its determinant's real page.
+
+    The LLM cites the section's first page for every item; this replaces those
+    with per-determinant pages found in the content-view PDF (the one
+    pagination already renders + caches, so no extra Word render). Deterministic
+    page correction — no LLM cost, no change to story wording.
+    """
+    from src.settlement.settlement_report import story_items, _item_determinant, rewrite_item_pages
+
+    jira_stories = stories.get("jira_stories") if isinstance(stories, dict) else None
+    if not jira_stories:
+        return stories
+    # Cite pages from the MARKUP-view PDF so item citations match the redline
+    # screenshots exactly (Eduardo, 2026-07-17) — the content and markup views
+    # paginate differently, and the screenshots come from the markup view.
+    docx = pathlib.Path(docx_path).resolve()
+    pdf = (pathlib.Path(cache_dir) / (docx.stem + ".markup.pdf")).resolve()
+    if not pdf.exists() and not pagination.render_pdf_with_word(docx, pdf, with_markup=True):
+        return stories
+    determinants = set()
+    for story in jira_stories:
+        for _, text in story_items(story.get("description", "")):
+            code = _item_determinant(text).lstrip("#")
+            if code:
+                determinants.add(code)
+        for item in story.get("items") or []:  # the formula-free mirror (2026-07-17.2)
+            code = str(item.get("determinant", "")).lstrip("#")
+            if code:
+                determinants.add(code)
+    if not determinants:
+        return stories
+    mp_headings = [f"{e['section']} {e['title']}" for e in report.get("charge_type_index") or []
+                   if str(e.get("banner", "")).startswith("Market")]
+    heading_pages = pagination.page_map_from_pdf(pdf, mp_headings)
+    start = min(heading_pages.values()) if heading_pages else 1
+    page_of = pagination.determinant_pages(pdf, determinants, start_page=start)
+    if not page_of:
+        return stories
+    rr_key = str(report.get("rr_id", "RR")).replace(" ", "")
+    for story in jira_stories:
+        story["description"] = rewrite_item_pages(story["description"], page_of)
+        # Stamp each mirror item with its page and the screenshot code (RR<id>-NN)
+        # so the workbook can show "<action> [code] [p.N]" and Miquel's app can
+        # place the matching image.
+        for item in story.get("items") or []:
+            det = str(item.get("determinant", "")).lstrip("#")
+            item["page"] = page_of.get(det)
+            item["code"] = f"{rr_key}-{int(item.get('n', 0)):02d}"
+    LOGGER.info("[%s] corrected per-item pages for %d/%d determinants",
+                report.get("rr_id"), len(page_of), len(determinants))
+    return stories
+
+
+def annotate_links(results, *, sync_root, base_url, cuf_dirs=()) -> None:
+    """Resolve SharePoint links for each result (in place).
+
+    - report["sharepoint_url"]: the RR docx's link (also appended to each story
+      description so the link, not just the filename, is in the description).
+    - report["market_initiative_url"]: the CUF/SUF file named in the initiative
+      citation ("<file>.pdf:pN"), resolved under cuf_dirs.
+    Requires sync_root + base_url; a missing file just leaves the field empty.
+    """
+    from src.documents.local_source import to_sharepoint_url
+
+    if not sync_root or not base_url:
+        return
+    for res in results:
+        report = res["report"]
+        docx = res.get("docx_path")
+        if docx:
+            rr_url = to_sharepoint_url(pathlib.Path(docx), sync_root, base_url)
+            if rr_url:
+                report["sharepoint_url"] = rr_url
+                for story in (res.get("stories") or {}).get("jira_stories") or []:
+                    desc = story.get("description", "")
+                    if rr_url not in desc:
+                        story["description"] = desc.rstrip() + f"\nRecommendation Report (SharePoint): {rr_url}"
+        citation = str(report.get("market_initiative_citation", ""))
+        filename = citation.split(":")[0].strip()
+        if filename:
+            for base in cuf_dirs:
+                hit = next(iter(pathlib.Path(base).rglob(filename)), None)
+                if hit:
+                    report["market_initiative_url"] = to_sharepoint_url(hit, sync_root, base_url)
+                    break
 
 
 def run(
@@ -197,6 +290,9 @@ def run(
     client_secret: str = "",
     initiatives: dict[str, str] | None = None,
     protocols_url: str = "",
+    sync_root=None,
+    base_url: str = "",
+    cuf_dirs=(),
 ) -> tuple[str, list[dict[str, Any]]]:
     """Run the pipeline over local files and/or SharePoint links and write the xlsx.
 
@@ -219,6 +315,9 @@ def run(
 
     images_root = os.path.join(os.path.dirname(os.path.abspath(out_path)), "images")
     results = [process_one(docx, url, engine, initiatives, images_root, protocols_url) for docx, url in jobs]
+    # Resolve SharePoint links (RR + CUF/SUF citation) BEFORE building the report
+    # so the report's links and each description's RR link are populated.
+    annotate_links(results, sync_root=sync_root, base_url=base_url, cuf_dirs=cuf_dirs)
     build(results, out_path)
     LOGGER.info("Wrote %s", out_path)
 

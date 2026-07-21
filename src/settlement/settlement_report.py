@@ -77,6 +77,35 @@ def _item_determinant(text):
     return match.group(0) if match else ""
 
 
+def rewrite_item_pages(description, page_by_determinant):
+    """Rewrite each numbered item's [p.X] to that item's determinant's real page.
+
+    The LLM cites the section's first page for every item (all "[p.15]") because
+    it can't paginate. `page_by_determinant` maps a determinant (no leading '#')
+    to the page where its formula actually appears; this replaces the citation on
+    each item whose determinant is in the map. The go-live block and trailing
+    Background/link paragraphs are left untouched. Pure string op — no I/O.
+    """
+    if not description:
+        return description
+    marks=list(_ITEM_BOUNDARY.finditer(description))
+    if not marks:
+        return description
+    out=[description[:marks[0].start()]]
+    for k,m in enumerate(marks):
+        end=marks[k+1].start() if k+1<len(marks) else len(description)
+        chunk=description[m.start():end]
+        # Only the item body (before the first blank line) carries the citation;
+        # anything after it belongs to trailing paragraphs, leave it alone.
+        body,sep,rest=chunk.partition("\n\n")
+        det=_item_determinant(body).lstrip("#")
+        page=page_by_determinant.get(det)
+        if page and _PAGE_REF.search(body):
+            body=_PAGE_REF.sub(f"[p.{page}]",body)
+        out.append(body+sep+rest)
+    return "".join(out)
+
+
 def build(results, out_path):
     wb=Workbook()
     ws=wb.active; ws.title="RR Summary"; ws.sheet_view.showGridLines=False
@@ -123,6 +152,10 @@ def build(results, out_path):
             if ci==5: c.font=Font(name="Courier New",size=10)
             if ci==7 and url:
                 c.value="Open in SharePoint"; c.hyperlink=url
+                c.font=Font(name="Arial",size=10,color="185FA5",underline="single")
+            # Make the initiative citation clickable to the CUF/SUF file it names.
+            if ci==8 and val and d.get("market_initiative_url"):
+                c.hyperlink=d["market_initiative_url"]
                 c.font=Font(name="Arial",size=10,color="185FA5",underline="single")
         ws.row_dimensions[r].height=72; r+=1
         if cls=="SETTLEMENT_CALC":

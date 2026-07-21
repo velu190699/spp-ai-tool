@@ -183,6 +183,49 @@ def test_send_slack_failure_skips_when_unconfigured():
         post.assert_not_called()
 
 
+def test_format_story_drafts_message_lists_report_and_per_rr_templates():
+    from src.notifications.notifier import format_story_drafts_message
+
+    payload = format_story_drafts_message(
+        "SPPIM settlement Jira story drafts — RR728, RR623 — PM review needed (July 20, 2026)",
+        "https://sp/report.xlsx?web=1",
+        [("RR728", "https://sp/RR728_stories.xlsx"), ("RR623", "https://sp/RR623_stories.xlsx")],
+    )
+    body = payload["blocks"][0]["text"]["text"]
+    assert "<https://sp/report.xlsx?web=1|Open the settlement report in SharePoint>" in body
+    assert {"type": "divider"} in payload["blocks"]
+    text = _section_text(payload)
+    assert "Story templates for PM review (2 RRs)" in text
+    assert "<https://sp/RR728_stories.xlsx|RR728 story template>" in text
+    assert "<https://sp/RR623_stories.xlsx|RR623 story template>" in text
+    assert "RR728, RR623" in payload["text"]  # fallback names the RRs
+
+
+def test_format_story_drafts_message_handles_missing_links():
+    from src.notifications.notifier import format_story_drafts_message
+
+    payload = format_story_drafts_message("Drafts", "", [("RR728", "")])
+    body = payload["blocks"][0]["text"]["text"]
+    assert "no SharePoint link available" in body           # report link absent
+    assert "RR728 story template (no link)" in _section_text(payload)  # per-RR link absent
+    assert "(1 RR)" in _section_text(payload)               # singular
+
+
+def test_send_slack_story_drafts_posts_via_bot():
+    from src.notifications.notifier import send_slack_story_drafts
+
+    response = MagicMock()
+    response.json.return_value = {"ok": True}
+    with patch("src.notifications.notifier.requests.post", return_value=response) as post:
+        assert send_slack_story_drafts(
+            "Drafts", "https://sp/report", [("RR728", "https://sp/rr728")],
+            bot_token="xoxb-1", channel="#c",
+        ) is True
+        _, kwargs = post.call_args
+        text = "\n".join(b["text"]["text"] for b in kwargs["json"]["blocks"] if b.get("type") == "section")
+        assert "RR728 story template" in text
+
+
 def test_relevant_rr_line_marks_updated_rrs():
     from src.notifications.notifier import _relevant_rr_line
 

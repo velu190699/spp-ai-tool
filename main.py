@@ -29,8 +29,13 @@ from src.documents.local_source import (
 from src.documents.pdf_parser import parse_pdf
 from src.documents.rr_extractor import initiative_from_contexts, merge_mentions
 from src.documents.zip_utils import extract_first_recommendation_report, extract_pdfs
-from src.notifications.notifier import log_slack_draft, send_slack_failure, send_slack_report_link
-from src.settlement import jira_template_writer
+from src.notifications.notifier import (
+    log_slack_draft,
+    send_slack_failure,
+    send_slack_report_link,
+    send_slack_story_drafts,
+)
+from src.settlement import jira_template_writer, screenshots
 from src.settlement import pipeline as settlement_pipeline
 from src.state.metadata_store import MetadataStore
 from src.summaries.html_renderer import render_report
@@ -773,6 +778,10 @@ def generate_settlement_report(
         initiatives=initiatives,
         # Stories cross-link the RR to the synced Protocols/SUG copy.
         protocols_url=to_sharepoint_url(config.protocols_dir, config.sharepoint_sync_root, config.sharepoint_base_url, is_folder=True),
+        # For resolving the RR and CUF/SUF citation links into the report.
+        sync_root=config.sharepoint_sync_root,
+        base_url=config.sharepoint_base_url,
+        cuf_dirs=(config.cuf_dir, config.suf_dir),
     )
     LOGGER.info("Settlement report written: %s", out_path)
 
@@ -784,6 +793,19 @@ def generate_settlement_report(
         published_path = str(config.published_settlement_reports_dir / Path(out_path).name)
         shutil.copy2(out_path, published_path)
         LOGGER.info("Settlement report published: %s", published_path)
+
+    # Every published report notifies the channel, not just the HTML briefing
+    # (Eduardo, 2026-07-17).
+    rr_ids = [str(res["report"].get("rr_id", "?")) for res in results]
+    report_url = to_sharepoint_url(Path(published_path), config.sharepoint_sync_root, config.sharepoint_base_url)
+    send_slack_report_link(
+        f"SPPIM settlement RR report — {', '.join(rr_ids)} ({datetime.now().strftime('%B %d, %Y')})",
+        report_url,
+        webhook_url=config.slack_webhook_url,
+        bot_token=config.slack_bot_token,
+        channel=config.slack_channel,
+        note="" if report_url else "Report written locally; no SharePoint link available.",
+    )
 
     # Record what was processed at which content version, so the next run
     # skips these RRs until SPP re-publishes them (UPDATE detection).
@@ -797,24 +819,45 @@ def generate_settlement_report(
     # --stories re-enables per-RR workbook generation.
     if write_stories:
         written = 0
+        rr_links: list[tuple[str, str]] = []  # (rr_id, workbook SharePoint url) for Slack
         for res in results:
+            rr_id = str(res["report"].get("rr_id", "RR")).replace(" ", "")
+            # Screenshot tab (Miquel's guide): one cropped redline image per
+            # numbered item (markup view), on a sheet named after the Local ID.
+            # Run this BEFORE stories_from_results so each item's screenshot count
+            # (`parts`) is stamped on the mirror items and the workbook
+            # description can list its a/b codes.
+            shots: dict[str, list] = {}
+            if res.get("docx_path"):
+                rr_digits = "".join(ch for ch in rr_id if ch.isdigit())
+                images = screenshots.item_screenshots(
+                    res["docx_path"], res["report"], res.get("stories"),
+                    config.settlement_reports_dir / "screenshots" / f"rr{rr_digits}",
+                    config.settlement_reports_dir / "rendered",
+                )
+                if images:
+                    shots[rr_id] = images
             rows = jira_template_writer.stories_from_results([res])
             if not rows:
                 continue  # TARIFF_GOVERNANCE etc. — no story content for this RR
-            rr_id = str(res["report"].get("rr_id", "RR")).replace(" ", "")
+            if shots.get(rr_id):
+                rows[0].local_id = rr_id  # Local ID only when screenshots exist (guide)
             jira_out = config.jira_stories_dir / f"{rr_id}_Jira_Stories-{run_id}.xlsx"
-            jira_template_writer.write_story_workbook(config.jira_template_file, jira_out, rows)
+            jira_template_writer.write_story_workbook(config.jira_template_file, jira_out, rows, screenshots=shots)
             written += 1
-            LOGGER.info("Story workbook written for %s: %s", rr_id, jira_out.name)
+            rr_links.append((rr_id, to_sharepoint_url(jira_out, config.sharepoint_sync_root, config.sharepoint_base_url)))
+            LOGGER.info("Story workbook written for %s: %s (%d screenshot pages)", rr_id, jira_out.name, len(shots.get(rr_id, [])))
         if written:
-            folder_url = to_sharepoint_url(config.jira_stories_dir, config.sharepoint_sync_root, config.sharepoint_base_url, is_folder=True)
-            send_slack_report_link(
-                f"SPPIM settlement Jira story drafts ({written} RRs) — PM review needed ({datetime.now().strftime('%B %d, %Y')})",
-                folder_url,
+            # One descriptive message: report link on top, then a link to each
+            # RR's story template (Eduardo, 2026-07-20).
+            send_slack_story_drafts(
+                f"SPPIM settlement Jira story drafts — {', '.join(rr for rr, _ in rr_links)} "
+                f"— PM review needed ({datetime.now().strftime('%B %d, %Y')})",
+                report_url,
+                rr_links,
                 webhook_url=config.slack_webhook_url,
                 bot_token=config.slack_bot_token,
                 channel=config.slack_channel,
-                note="" if folder_url else "Workbooks written locally; no SharePoint link available.",
             )
     return 0
 

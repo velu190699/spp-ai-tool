@@ -6,12 +6,42 @@ from openpyxl import load_workbook
 from src.settlement.settlement_report import build, story_items
 
 
-def test_extraction_prompt_declares_version_and_one_story_rule():
-    # The prompt is the reproducibility contract: it must carry a version tag
-    # (stamped into every stories JSON) and the ONE STORY PER RR rule.
+def test_extraction_prompt_declares_version_one_story_and_fidelity():
+    # The prompt is the reproducibility contract: version tag (stamped into every
+    # stories JSON), the ONE STORY PER RR rule, and the fidelity/no-editorial rule.
     text = Path("src/settlement/rr_extraction_prompt.md").read_text(encoding="utf-8")
     assert re.match(r"PROMPT_VERSION:\s*\S+", text)
     assert "ONE STORY PER RR" in text
+    assert "FIDELITY, NOT JUDGMENT" in text
+
+
+def test_rewrite_item_pages_sets_per_determinant_pages():
+    from src.settlement.settlement_report import rewrite_item_pages
+
+    desc = (
+        "a. Add a parameter for go live of this RR (RR728). Go Live Date TBD.\n\n"
+        "1. Update the calculation for #RtMwpDistHrlyAmt to match: X. [p.15]\n"
+        "2. Update the calculation for RtDevHrlyQty to match: Y. [p.15]\n"
+        "3. Add RtVirtReplaceHrlyQty: Z. [p.15]\n\n"
+        "Background: Tariff Attachment AE 8.6.7. [p.15]\n\n"
+        "Settlement User Guide: https://example/protocols"
+    )
+    page_by_det = {"RtMwpDistHrlyAmt": 15, "RtDevHrlyQty": 16, "RtVirtReplaceHrlyQty": 18}
+    out = rewrite_item_pages(desc, page_by_det)
+
+    assert "#RtMwpDistHrlyAmt to match: X. [p.15]" in out
+    assert "RtDevHrlyQty to match: Y. [p.16]" in out
+    assert "RtVirtReplaceHrlyQty: Z. [p.18]" in out
+    # Go-live block and trailing Background paragraph keep their original text.
+    assert "go live of this RR (RR728)" in out
+    assert "Background: Tariff Attachment AE 8.6.7. [p.15]" in out
+
+
+def test_rewrite_item_pages_leaves_unmapped_items_untouched():
+    from src.settlement.settlement_report import rewrite_item_pages
+
+    desc = "1. Update the calculation for #Unknown to match: X. [p.15]\n"
+    assert rewrite_item_pages(desc, {"RtDevHrlyQty": 16}) == desc
 
 SAMPLE_REPORT = {
     "rr_id": "RR900",

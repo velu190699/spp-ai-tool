@@ -16,9 +16,12 @@ key, e.g. PM-944) is also left blank for the PM.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+_ITEM_BOUNDARY = re.compile(r"(?m)^\s*\d+\.\s+")
 
 from openpyxl import load_workbook
 
@@ -27,6 +30,7 @@ LOGGER = logging.getLogger(__name__)
 STORIES_SHEET = "Jira Stories"
 TESTS_SHEET = "Tests"
 SUMMARY_PREFIX = "[SPPIM: Back Office: Settlements]"
+_SCREENSHOT_MAX_WIDTH_PX = 1000
 
 # Header text -> StoryRow attribute. Green columns are deliberately absent.
 _FIELD_BY_HEADER = {
@@ -82,7 +86,12 @@ def _find_header_row(ws) -> int:
     )
 
 
-def write_story_workbook(template_path: Path, out_path: Path, rows: list[StoryRow]) -> Path:
+def write_story_workbook(
+    template_path: Path,
+    out_path: Path,
+    rows: list[StoryRow],
+    screenshots: dict[str, list[tuple[Path, str]]] | None = None,
+) -> Path:
     """Fill a copy of the template with `rows` and save it to `out_path`.
 
     The template file itself is never modified. Formatting, data validation,
@@ -90,6 +99,10 @@ def write_story_workbook(template_path: Path, out_path: Path, rows: list[StoryRo
     untouched so Miquel's app sees exactly the workbook shape it expects. The
     Tests sheet's shipped EXAMPLE rows are removed — we don't author tests, so
     the tab ships blank below its header (Elizabeth/Eduardo, 2026-07-16).
+
+    `screenshots` maps a row's Local ID to [(png_path, caption), ...]. Per
+    Miquel's story-creation guide, each Local ID gets a sheet with that EXACT
+    name holding the images — his sync app attaches them to the Jira issue.
     """
     wb = load_workbook(template_path)
     if STORIES_SHEET not in wb.sheetnames:
@@ -119,16 +132,45 @@ def write_story_workbook(template_path: Path, out_path: Path, rows: list[StoryRo
             value = getattr(story, attr)
             ws.cell(row=row, column=columns[header], value=value or None)
 
+    for local_id, images in (screenshots or {}).items():
+        if images:
+            _add_screenshot_sheet(wb, local_id, images)
+
     out_path.parent.mkdir(parents=True, exist_ok=True)
     wb.save(out_path)
     LOGGER.info("Jira story workbook written: %s (%d rows)", out_path, len(rows))
     return out_path
 
 
-def _rr_footer(rr: str, url: str, initiative: str, initiative_citation: str = "", protocol_version: str = "") -> str:
-    lines = ["", "", f"Recommendation Report: {rr} Recommendation Report.docx"]
-    if url:
-        lines.append(f"SharePoint: {url}")
+def _add_screenshot_sheet(wb, local_id: str, images: list[tuple[Path, str]]) -> None:
+    """One sheet named EXACTLY local_id, images stacked with caption rows."""
+    from openpyxl.drawing.image import Image as XlsxImage
+
+    ws = wb.create_sheet(str(local_id))
+    ws.sheet_view.showGridLines = False
+    anchor_row = 1
+    for png_path, caption in images:
+        ws.cell(row=anchor_row, column=1, value=caption)
+        image = XlsxImage(str(png_path))
+        # Scale to a readable on-screen width; Excel keeps the aspect ratio we set.
+        if image.width and image.width > _SCREENSHOT_MAX_WIDTH_PX:
+            ratio = _SCREENSHOT_MAX_WIDTH_PX / image.width
+            image.width = int(image.width * ratio)
+            image.height = int(image.height * ratio)
+        ws.add_image(image, f"A{anchor_row + 1}")
+        # ~20 px per default row: leave room for the image plus a spacer row.
+        anchor_row += int(image.height / 20) + 3
+
+
+def _rr_footer(rr: str, url: str, initiative: str, initiative_citation: str = "",
+               protocol_version: str = "", include_rr_link: bool = True) -> str:
+    lines = ["", ""]
+    if include_rr_link:
+        # Only when the description doesn't already carry the RR link (the
+        # pipeline appends it) — avoids a duplicate link in the workbook.
+        lines.append(f"Recommendation Report: {rr} Recommendation Report.docx")
+        if url:
+            lines.append(f"SharePoint: {url}")
     if protocol_version:
         lines.append(f"Market Protocols (Settlement User Guide) version: {protocol_version}")
     if initiative:
@@ -136,6 +178,56 @@ def _rr_footer(rr: str, url: str, initiative: str, initiative_citation: str = ""
         cite = f" [{initiative_citation}]" if initiative_citation else ""
         lines.append(f"Market initiative (as named on the slide): {initiative}{cite}")
     return "\n".join(lines)
+
+
+def _workbook_description(story: dict, footer: str) -> str:
+    """Build the Jira workbook description for one story.
+
+    When the story carries the formula-free "items" mirror, each numbered line
+    becomes "<n>. <action> [<code>] [p.<page>]" — the screenshot code replaces
+    the written formula so Miquel's app inserts the image there (Eduardo,
+    2026-07-17). An item whose formula spans two screenshots lists both codes
+    ("[…-02a] […-02b]"), so a reviewer sees it has two images; an item whose
+    formula could not be cropped (`parts` == 0, e.g. an image-only formula) shows
+    no code. The go-live block (before the list) and the trailing Background/link
+    paragraphs are preserved from the full description. Without items, the full
+    description (formulas and all) is used unchanged.
+    """
+    description = str(story.get("description", ""))
+    items = story.get("items") or []
+    marks = list(_ITEM_BOUNDARY.finditer(description))
+    if not items or not marks:
+        return description + footer
+    head = description[:marks[0].start()].rstrip()
+    _body, _sep, tail = description[marks[-1].start():].partition("\n\n")
+    lines = []
+    for item in sorted(items, key=lambda x: int(x.get("n", 0))):
+        code = item.get("code") or ""
+        page = item.get("page")
+        pg = f" [p.{page}]" if page else ""
+        lines.append(f"{int(item.get('n', 0))}. {str(item.get('action', '')).strip()}"
+                     f"{_code_tags(code, item.get('parts'))}{pg}")
+    parts = [p for p in (head, "\n".join(lines), tail.strip()) if p]
+    return "\n\n".join(parts) + footer
+
+
+def _code_tags(code: str, parts: Any) -> str:
+    """Screenshot code tag(s) for a description item.
+
+    `parts` is the image count stamped by screenshots.item_screenshots: None
+    (screenshots not generated) → one "[code]"; 0 (no crop) → nothing; N >= 2 →
+    one tag per image ("[code a]", "[code b]", …), matching the sheet captions.
+    """
+    if not code:
+        return ""
+    if parts is None:
+        return f" [{code}]"
+    n = int(parts)
+    if n <= 0:
+        return ""
+    if n == 1:
+        return f" [{code}]"
+    return "".join(f" [{code}{chr(ord('a') + i) if i < 26 else str(i + 1)}]" for i in range(n))
 
 
 def _normalize_ac_item(item: Any) -> str:
@@ -176,13 +268,15 @@ def stories_from_results(results: list[dict[str, Any]]) -> list[StoryRow]:
         status = d["reconciliation"]["status"]
         rr = d.get("rr_id", "?")
         url = d.get("sharepoint_url") or ""
-        footer = _rr_footer(
-            rr,
-            url,
-            d.get("market_initiative", ""),
-            d.get("market_initiative_citation", ""),
-            d.get("protocol_version", ""),
-        )
+
+        def _footer_for(description_text: str) -> str:
+            return _rr_footer(
+                rr, url,
+                d.get("market_initiative", ""),
+                d.get("market_initiative_citation", ""),
+                d.get("protocol_version", ""),
+                include_rr_link=not (url and url in description_text),
+            )
         llm = res.get("stories") if isinstance(res.get("stories"), dict) else None
         llm_stories = (llm or {}).get("jira_stories") or []
 
@@ -191,7 +285,7 @@ def stories_from_results(results: list[dict[str, Any]]) -> list[StoryRow]:
                 for s in llm_stories:
                     story_rows.append(StoryRow(
                         summary=_prefixed(str(s.get("summary", ""))),
-                        description=str(s.get("description", "")) + footer,
+                        description=_workbook_description(s, _footer_for(str(s.get("description", "")))),
                         acceptance_criteria=_format_ac(s.get("acceptance_criteria")),
                     ))
             else:
@@ -203,7 +297,7 @@ def stories_from_results(results: list[dict[str, Any]]) -> list[StoryRow]:
                             f"As a user, I want the SPPIM settlements calculation updated per {rr} "
                             f"Market Protocols §{entry['section']} {entry['title']} ({st}).\n\n"
                             f"Source: {rr} Recommendation Report, p.{entry.get('page', '?')}."
-                            f"{footer}\n\n"
+                            f"{_footer_for('')}\n\n"
                             "DRAFT: generated without LLM story extraction — run "
                             "`settlement-report --call-claude` for full descriptions before PM review."
                         ),
@@ -217,7 +311,7 @@ def stories_from_results(results: list[dict[str, Any]]) -> list[StoryRow]:
                     f"The automated extraction for {rr} failed its reconciliation gate "
                     f"(status: {status}). A settlements SME must review the RR directly; "
                     "do not trust auto-generated charge-code rows for this RR."
-                    f"{footer}"
+                    f"{_footer_for('')}"
                 ),
                 acceptance_criteria=_format_ac(["RR reviewed by settlements SME and stories authored manually"]),
             ))
@@ -228,7 +322,7 @@ def stories_from_results(results: list[dict[str, Any]]) -> list[StoryRow]:
                 description=(
                     f"{rr} changes settlement-relevant Tariff/Protocol prose without charge-code "
                     "redlines. Review whether PCI settlement logic or documentation is affected."
-                    f"{footer}"
+                    f"{_footer_for('')}"
                 ),
                 acceptance_criteria=_format_ac(["Impact assessed and documented; follow-up stories created if needed"]),
             ))

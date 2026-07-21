@@ -24,8 +24,14 @@ from pathlib import Path
 LOGGER = logging.getLogger(__name__)
 
 
-def render_pdf_with_word(docx_path: Path, pdf_path: Path) -> bool:
-    """Render docx -> PDF with headless Microsoft Word COM. True on success."""
+def render_pdf_with_word(docx_path: Path, pdf_path: Path, *, with_markup: bool = False) -> bool:
+    """Render docx -> PDF with headless Microsoft Word COM. True on success.
+
+    with_markup=True exports the tracked-changes view (insertions underlined,
+    deletions struck through) — used for the story-workbook screenshots. The
+    default content view is what pagination anchors cite; the two views can
+    paginate differently, so never mix their page numbers.
+    """
     try:
         import pythoncom
         import win32com.client
@@ -41,7 +47,15 @@ def render_pdf_with_word(docx_path: Path, pdf_path: Path) -> bool:
         word.DisplayAlerts = 0
         doc = word.Documents.Open(str(docx_path), ReadOnly=True, AddToRecentFiles=False)
         try:
-            doc.ExportAsFixedFormat(str(pdf_path), 17)  # 17 = wdExportFormatPDF
+            if with_markup:
+                # Word refuses Item=wdExportDocumentWithMarkup (bogus "directory
+                # name isn't valid" error) unless the revisions view actually
+                # shows the markup — force it before exporting.
+                view = doc.ActiveWindow.View
+                view.ShowRevisionsAndComments = True
+                view.RevisionsView = 0  # wdRevisionsViewFinal: final text + markup
+            # 17 = wdExportFormatPDF; Item 7 = wdExportDocumentWithMarkup, 0 = content
+            doc.ExportAsFixedFormat(str(pdf_path), 17, Item=7 if with_markup else 0)
         finally:
             doc.Close(False)
         return pdf_path.exists()
@@ -83,6 +97,33 @@ def page_map_from_pdf(pdf_path: Path, headings: list[str]) -> dict[str, int]:
             if needle and needle in text:
                 result[original] = page_number
                 del wanted[original]
+    return result
+
+
+def determinant_pages(pdf_path: Path, determinants, start_page: int = 1) -> dict[str, int]:
+    """Map each determinant to the first PDF page (>= start_page) it appears on.
+
+    Keys are returned without a leading '#'. start_page skips the table of
+    contents / definition lists so a determinant resolves to its formula page,
+    not an earlier mention.
+    """
+    from pypdf import PdfReader
+
+    result: dict[str, int] = {}
+    try:
+        texts = [_normalize(p.extract_text() or "") for p in PdfReader(str(pdf_path)).pages]
+    except Exception as exc:
+        LOGGER.warning("Could not read PDF %s for determinant pages: %s", pdf_path, exc)
+        return result
+    for determinant in determinants:
+        key = str(determinant).lstrip("#")
+        needle = _normalize(key)
+        if not needle:
+            continue
+        for page_number in range(max(1, start_page), len(texts) + 1):
+            if needle in texts[page_number - 1]:
+                result[key] = page_number
+                break
     return result
 
 

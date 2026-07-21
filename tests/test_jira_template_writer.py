@@ -83,6 +83,65 @@ def test_stories_prefer_llm_output_when_present():
     assert "DST dates" in story.acceptance_criteria  # boilerplate follows
 
 
+def test_workbook_description_uses_item_codes_instead_of_formulas():
+    from src.settlement.jira_template_writer import _workbook_description
+
+    story = {
+        "description": (
+            "a. Add a parameter for go live of this RR (RR728). Go Live Date TBD.\n\n"
+            "1. Update the calculation for #RtMwpDistHrlyAmt to match: A = B * C. [p.16]\n"
+            "2. Add calculation for #RtDevHrlyQty: D = E + F. [p.17]\n\n"
+            "Background: Tariff Attachment AE.\n\n"
+            "Recommendation Report (SharePoint): https://sp/rr728"
+        ),
+        "items": [
+            {"n": 1, "action": "Update the calculation for #RtMwpDistHrlyAmt (BAA level).",
+             "determinant": "#RtMwpDistHrlyAmt", "code": "RR728-01", "page": 16},
+            {"n": 2, "action": "Add the calculation for #RtDevHrlyQty.",
+             "determinant": "#RtDevHrlyQty", "code": "RR728-02", "page": 17},
+        ],
+    }
+    out = _workbook_description(story, "\n\nFOOTER")
+
+    assert "1. Update the calculation for #RtMwpDistHrlyAmt (BAA level). [RR728-01] [p.16]" in out
+    assert "2. Add the calculation for #RtDevHrlyQty. [RR728-02] [p.17]" in out
+    assert "A = B * C" not in out and "D = E + F" not in out  # formulas replaced by codes
+    assert "go live of this RR" in out  # go-live block kept
+    assert "Background: Tariff Attachment AE." in out  # trailing paragraph kept
+    assert out.endswith("FOOTER")
+
+
+def test_workbook_description_splits_codes_for_multi_screenshot_items():
+    # An item whose formula spans two screenshots lists both codes; one with no
+    # crop (parts == 0) shows no code; parts unset behaves like a single code.
+    from src.settlement.jira_template_writer import _workbook_description
+
+    story = {
+        "description": (
+            "1. Update #A. [p.16]\n"
+            "2. Update #B. [p.17]\n"
+            "3. Update #C. [p.18]\n\n"
+            "Background."
+        ),
+        "items": [
+            {"n": 1, "action": "Update #A.", "code": "RR728-01", "page": 16, "parts": 2},
+            {"n": 2, "action": "Update #B.", "code": "RR728-02", "page": 17, "parts": 0},
+            {"n": 3, "action": "Update #C.", "code": "RR728-03", "page": 18},
+        ],
+    }
+    out = _workbook_description(story, "")
+
+    assert "1. Update #A. [RR728-01a] [RR728-01b] [p.16]" in out
+    assert "2. Update #B. [p.17]" in out and "RR728-02" not in out  # no crop -> no code
+    assert "3. Update #C. [RR728-03] [p.18]" in out                  # parts unset -> one code
+
+
+def test_workbook_description_without_items_is_unchanged():
+    from src.settlement.jira_template_writer import _workbook_description
+
+    assert _workbook_description({"description": "Plain body."}, " + F") == "Plain body. + F"
+
+
 def test_no_relevant_rrs_returns_empty():
     assert stories_from_results([_result("RR665", "TARIFF_GOVERNANCE", "NO_CHARGE_CODES")]) == []
 
@@ -121,3 +180,31 @@ def test_write_story_workbook_respects_template_contract(tmp_path):
     # The source template still has its example rows (we filled a copy).
     assert load_workbook(TEMPLATE)["Jira Stories"].max_row > 4
     assert load_workbook(TEMPLATE)["Tests"].max_row > 4
+
+
+def test_write_story_workbook_adds_screenshot_tab(tmp_path):
+    # Per Miquel's guide: Local ID in the row, sheet named EXACTLY like it,
+    # screenshots on that sheet. Images land in the xlsx package's media store.
+    from PIL import Image as PILImage
+
+    png = tmp_path / "page-015.png"
+    PILImage.new("RGB", (1200, 800), "white").save(png)
+
+    row = StoryRow(summary="[SPPIM: Back Office: Settlements] RR728 test", local_id="RR728")
+    out = tmp_path / "out.xlsx"
+    write_story_workbook(TEMPLATE, out, [row],
+                         screenshots={"RR728": [(png, "RR728 Recommendation Report — p.15")]})
+
+    wb = load_workbook(out)
+    assert "RR728" in wb.sheetnames
+    assert wb["RR728"]["A1"].value == "RR728 Recommendation Report — p.15"
+
+    import zipfile
+    with zipfile.ZipFile(out) as z:
+        media = [n for n in z.namelist() if n.startswith("xl/media/")]
+    assert media, "screenshot image missing from the xlsx package"
+
+    # Local ID written to column C of the story row.
+    ws = wb["Jira Stories"]
+    headers = {str(ws.cell(row=4, column=c).value or "").strip(): c for c in range(1, ws.max_column + 1)}
+    assert ws.cell(row=5, column=headers["Local ID"]).value == "RR728"
