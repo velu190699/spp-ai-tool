@@ -49,6 +49,47 @@ def test_analysis_ledger_new_unchanged_updated(tmp_path):
     assert entry["history"][0]["input_hash"] == "h1"
 
 
+def test_watch_list_upsert_preserves_initiative_and_first_seen(tmp_path):
+    store = MetadataStore(tmp_path / "metadata.json")
+    # Discovered via the July CUF with its initiative.
+    store.upsert_watched("728", {"title": "RUC MWP", "market_initiative": "Fall 2026 Bundle",
+                                 "domain": "BO", "status": "open"})
+    first = store.get_watched("728")
+    assert first["market_initiative"] == "Fall 2026 Bundle"
+    assert first["status"] == "open" and first["first_seen"]
+
+    # A later run whose materials DON'T name the initiative must not wipe it,
+    # and first_seen must be preserved.
+    store.upsert_watched("728", {"market_initiative": "", "status": "open"})
+    again = store.get_watched("728")
+    assert again["market_initiative"] == "Fall 2026 Bundle"
+    assert again["first_seen"] == first["first_seen"]
+
+
+def test_watch_list_status_list_and_prune(tmp_path):
+    store = MetadataStore(tmp_path / "metadata.json")
+    store.upsert_watched("728", {"status": "open"})
+    store.upsert_watched("750", {"status": "open"})
+    assert [w["rr_number"] for w in store.list_watched()] == ["728", "750"]
+
+    store.set_watched_status("728", "closed")
+    assert [w["rr_number"] for w in store.list_watched(status="open")] == ["750"]
+    assert [w["rr_number"] for w in store.list_watched(status="closed")] == ["728"]
+
+    store.remove_watched("728")  # after the final capture on close
+    assert store.get_watched("728") is None
+    assert [w["rr_number"] for w in store.list_watched()] == ["750"]
+
+
+def test_watch_list_survives_save_reload(tmp_path):
+    path = tmp_path / "metadata.json"
+    store = MetadataStore(path)
+    store.upsert_watched("786", {"market_initiative": "X", "domain": "BO"})
+    store.save()
+    reloaded = MetadataStore(path)
+    assert reloaded.get_watched("786")["market_initiative"] == "X"
+
+
 def test_relevant_rrs_roundtrip_and_atomic_save(tmp_path):
     path = tmp_path / "metadata.json"
     store = MetadataStore(path)

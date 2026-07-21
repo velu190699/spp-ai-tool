@@ -129,6 +129,53 @@ class MetadataStore:
             return None
         return entry.get("items") or None
 
+    # ------------------------------------------------------------------
+    # Watch list (Option B): RRs tracked for settlement while OPEN. CUF/SUF only
+    # DISCOVERS an RR and names its market initiative; from then on the RR is
+    # watched by Recommendation-Report change for as long as the RR Master List
+    # shows it open — so a late revision isn't missed just because a newer
+    # CUF/SUF stopped mentioning it. On close it gets one final capture, then is
+    # removed. Keyed by RR number (digits, no "RR" prefix).
+    # ------------------------------------------------------------------
+
+    def upsert_watched(self, rr_number: str, fields: dict[str, Any]) -> dict[str, Any]:
+        """Add or update a watched RR, merging ``fields``.
+
+        Preserves ``first_seen`` and never lets a later blank overwrite a value
+        already captured — e.g. the market initiative discovered on an earlier
+        CUF/SUF edition survives a later run whose materials don't name it.
+        """
+        now = datetime.now(timezone.utc).isoformat()
+        watched = self.data.setdefault("watched_rrs", {})
+        merged = dict(watched.get(rr_number, {}))
+        for field, value in fields.items():
+            if value not in (None, "") or field not in merged:
+                merged[field] = value
+        merged["rr_number"] = str(rr_number)
+        merged.setdefault("first_seen", now)
+        merged["last_seen"] = now
+        merged.setdefault("status", "open")
+        watched[rr_number] = merged
+        return merged
+
+    def list_watched(self, *, status: str | None = None) -> list[dict[str, Any]]:
+        items = list(self.data.get("watched_rrs", {}).values())
+        if status is not None:
+            items = [w for w in items if w.get("status") == status]
+        return sorted(items, key=lambda w: int(w["rr_number"]) if str(w.get("rr_number", "")).isdigit() else 0)
+
+    def get_watched(self, rr_number: str) -> dict[str, Any] | None:
+        return self.data.get("watched_rrs", {}).get(rr_number)
+
+    def set_watched_status(self, rr_number: str, status: str) -> None:
+        watched = self.data.setdefault("watched_rrs", {}).get(rr_number)
+        if watched:
+            watched["status"] = status
+            watched["last_seen"] = datetime.now(timezone.utc).isoformat()
+
+    def remove_watched(self, rr_number: str) -> None:
+        self.data.setdefault("watched_rrs", {}).pop(rr_number, None)
+
     def save_mentions(self, family: str, mentions: dict[str, Any]) -> None:
         self.data.setdefault("mentions_cache", {})[family] = mentions
 
