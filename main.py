@@ -22,6 +22,8 @@ from src.browser.spp_client import SppClient, SppDocument, rr_search_query_from_
 from src.documents.excel_parser import RRRecord, read_open_rrs
 from src.documents.local_source import (
     SourceEdition,
+    all_cuf_editions,
+    all_suf_editions,
     latest_cuf_edition,
     latest_suf_edition,
     to_sharepoint_url,
@@ -331,6 +333,85 @@ def _refresh_watch_list(state: MetadataStore, relevant_rrs: list[dict[str, Any]]
     ]
 
 
+def accumulate_watch_list_initiatives(state: MetadataStore, config, warnings: list[str]) -> None:
+    """Fill watched RRs' market initiatives from ALL synced CUF/SUF editions.
+
+    Option B accumulation: ``run`` parses only the LATEST edition for relevance,
+    so an RR whose initiative was named in an OLDER edition (RR750) shows blank.
+    This walks every synced CUF/SUF edition, parses each one ONCE (tracked in the
+    store), and for each WATCHED RR it finds mentioned records a dated
+    ``mentions_seen`` entry — the RR's current initiative then becomes the newest
+    edition that names one. The one-time backfill needs no special path: on the
+    first run nothing is marked parsed, so every older edition already synced is
+    parsed once; thereafter only a brand-new edition is. Watched RRs only — an RR
+    discovered solely in an old edition is NOT added to the watch list.
+    """
+    watched_nums = {w["rr_number"] for w in state.list_watched()}
+    if not watched_nums:
+        return
+    editions = (
+        all_cuf_editions(config.cuf_dir, config.sharepoint_sync_root, config.sharepoint_base_url)
+        + all_suf_editions(config.suf_dir, config.sharepoint_sync_root, config.sharepoint_base_url)
+    )
+    for edition in editions:
+        edition_key = f"{edition.kind}|{edition.label}"
+        if state.is_edition_parsed(edition_key):
+            continue
+        pdfs = [f.local_path for f in edition.files if f.local_path.suffix.lower() == ".pdf"]
+        mentions_all = []
+        for pdf in pdfs:
+            parsed = parse_pdf(pdf)
+            warnings.extend(parsed.warnings)
+            mentions_all.extend(parsed.rr_mentions)
+        mentions = merge_mentions(mentions_all)
+        meeting_date = edition.meeting_date.strftime("%Y-%m-%d") if edition.meeting_date else ""
+        filled = 0
+        for rr_number, data in mentions.items():
+            if rr_number not in watched_nums:
+                continue
+            label, citation = initiative_from_contexts(
+                data.get("contexts", []), data.get("context_sources", [])
+            )
+            state.add_watched_mention(
+                rr_number,
+                {
+                    "edition": edition_key,
+                    "kind": edition.kind,
+                    "label": edition.label,
+                    "meeting_date": meeting_date,
+                    "initiative": label,
+                    "initiative_citation": citation,
+                    "source": "; ".join(data.get("sources", [])[:2]),
+                },
+            )
+            filled += 1
+        state.mark_edition_parsed(
+            edition_key,
+            {"kind": edition.kind, "label": edition.label, "meeting_date": meeting_date, "pdfs": len(pdfs)},
+        )
+        LOGGER.info(
+            "Accumulated %s edition %s: %d PDF(s), %d watched RR mention(s)",
+            edition.kind, edition.label, len(pdfs), filled,
+        )
+
+
+def _enrich_relevant_from_watch_list(state: MetadataStore, relevant_rrs: list[dict[str, Any]]) -> None:
+    """Backfill a blank market initiative on the relevant list from the watch list.
+
+    After accumulation recovers an initiative named only in an older edition
+    (RR750), the current run's relevant list — built from the latest edition —
+    may still show it blank. Fill those blanks so the briefing shows the
+    recovered label; never overwrite an initiative the latest edition already named.
+    """
+    for rr in relevant_rrs:
+        if rr.get("market_initiative"):
+            continue
+        watched = state.get_watched(str(rr.get("rr_number")))
+        if watched and watched.get("market_initiative"):
+            rr["market_initiative"] = watched["market_initiative"]
+            rr["market_initiative_citation"] = watched.get("market_initiative_citation", "")
+
+
 def run(dry_run: bool) -> int:
     config = load_config()
     ensure_runtime_dirs(config)
@@ -504,6 +585,12 @@ def run(dry_run: bool) -> int:
     # dropped out of the newest CUF/SUF is still caught. dry-run keeps its
     # discovery-only view over the relevant list and never mutates the watch list.
     download_rrs = relevant_rrs if dry_run else _refresh_watch_list(state, relevant_rrs, open_rrs)
+    if not dry_run:
+        # Recover initiatives named only in OLDER editions (backfills on first
+        # run), then fill any still-blank initiative on the relevant list from the
+        # now-updated watch list so the briefing reflects the recovered label.
+        accumulate_watch_list_initiatives(state, config, warnings)
+        _enrich_relevant_from_watch_list(state, relevant_rrs)
     reports = [] if dry_run else process_recommendation_reports(
         relevant_rrs=download_rrs,
         client=client,

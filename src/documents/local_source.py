@@ -96,46 +96,58 @@ def _files_in(folder: Path, sync_root: Path, base_url: str) -> list[SourceFile]:
     ]
 
 
-def latest_cuf_edition(cuf_dir: Path, sync_root: Path, base_url: str) -> SourceEdition | None:
-    """The newest CUF meeting subfolder, with all its files enumerated."""
-    if not cuf_dir.exists():
-        LOGGER.warning("CUF directory does not exist: %s", cuf_dir)
-        return None
-    subfolders = [p for p in cuf_dir.iterdir() if p.is_dir()]
-    if not subfolders:
-        LOGGER.warning("No CUF meeting subfolders under %s", cuf_dir)
-        return None
-    latest = max(subfolders, key=lambda p: (meeting_date_from_name(p.name) or datetime.min, p.name))
+def _cuf_edition(folder: Path, sync_root: Path, base_url: str) -> SourceEdition:
     return SourceEdition(
         kind="CUF",
-        label=latest.name,
-        meeting_date=meeting_date_from_name(latest.name),
-        url=to_sharepoint_url(latest, sync_root, base_url, is_folder=True),
-        files=_files_in(latest, sync_root, base_url),
+        label=folder.name,
+        meeting_date=meeting_date_from_name(folder.name),
+        url=to_sharepoint_url(folder, sync_root, base_url, is_folder=True),
+        files=_files_in(folder, sync_root, base_url),
     )
+
+
+def _suf_edition(pdf: Path, sync_root: Path, base_url: str) -> SourceEdition:
+    suf_url = to_sharepoint_url(pdf, sync_root, base_url)
+    return SourceEdition(
+        kind="SUF",
+        label=pdf.name,
+        meeting_date=meeting_date_from_name(pdf.name),
+        url=suf_url,
+        files=[SourceFile(local_path=pdf, sharepoint_url=suf_url, filename=pdf.name)],
+    )
+
+
+def all_cuf_editions(cuf_dir: Path, sync_root: Path, base_url: str) -> list[SourceEdition]:
+    """Every CUF meeting subfolder as an edition, sorted oldest -> newest."""
+    if not cuf_dir.exists():
+        LOGGER.warning("CUF directory does not exist: %s", cuf_dir)
+        return []
+    editions = [_cuf_edition(p, sync_root, base_url) for p in cuf_dir.iterdir() if p.is_dir()]
+    return sorted(editions, key=lambda e: (e.meeting_date or datetime.min, e.label))
+
+
+def all_suf_editions(suf_dir: Path, sync_root: Path, base_url: str) -> list[SourceEdition]:
+    """Every SUF PDF as an edition, sorted oldest -> newest."""
+    if not suf_dir.exists():
+        LOGGER.warning("SUF directory does not exist: %s", suf_dir)
+        return []
+    editions = [_suf_edition(p, sync_root, base_url) for p in suf_dir.glob("*.pdf") if p.is_file()]
+    return sorted(editions, key=lambda e: (e.meeting_date or datetime.min, e.label))
+
+
+def latest_cuf_edition(cuf_dir: Path, sync_root: Path, base_url: str) -> SourceEdition | None:
+    """The newest CUF meeting subfolder, with all its files enumerated."""
+    editions = all_cuf_editions(cuf_dir, sync_root, base_url)
+    if not editions:
+        LOGGER.warning("No CUF meeting subfolders under %s", cuf_dir)
+        return None
+    return editions[-1]
 
 
 def latest_suf_edition(suf_dir: Path, sync_root: Path, base_url: str) -> SourceEdition | None:
     """The newest SUF PDF (SUF materials sit directly in the folder as files)."""
-    if not suf_dir.exists():
-        LOGGER.warning("SUF directory does not exist: %s", suf_dir)
-        return None
-    pdfs = [p for p in suf_dir.glob("*.pdf") if p.is_file()]
-    if not pdfs:
+    editions = all_suf_editions(suf_dir, sync_root, base_url)
+    if not editions:
         LOGGER.warning("No SUF PDFs under %s", suf_dir)
         return None
-    latest = max(pdfs, key=lambda p: (meeting_date_from_name(p.name) or datetime.min, p.name))
-    suf_url = to_sharepoint_url(latest, sync_root, base_url)
-    return SourceEdition(
-        kind="SUF",
-        label=latest.name,
-        meeting_date=meeting_date_from_name(latest.name),
-        url=suf_url,
-        files=[
-            SourceFile(
-                local_path=latest,
-                sharepoint_url=suf_url,
-                filename=latest.name,
-            )
-        ],
-    )
+    return editions[-1]

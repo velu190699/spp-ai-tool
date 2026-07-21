@@ -139,22 +139,43 @@ Recommendation Report while it is still open, the change is **missed**.
 > locked with Elizabeth ("relevance = latest CUF/SUF editions only") — inform her
 > as a courtesy, but implementation is green-lit.
 
-### Initiative accumulation across CUF/SUF editions 🎯 (2026-07-21)
+### Initiative accumulation across CUF/SUF editions ✅ (implemented 2026-07-22)
 
 An RR's market initiative may be named in an OLDER CUF/SUF edition than the one
-the tool parses (it reads only the latest for relevance). RR750 is the symptom:
-blank initiative because it was named in an earlier edition. Decisions:
+the tool parses (it reads only the latest for relevance). Design (all built):
 - **Accumulate facts across editions.** Each CUF/SUF edition is parsed **once**
-  (tracked as parsed); its per-RR mentions/initiatives merge into the watch list
-  — never blank-overwriting a captured value, but a newer edition may update the
-  "current" initiative. A **one-time backfill** parses the older editions already
-  synced so historical initiatives (e.g. RR750's) are recovered.
+  (tracked in `parsed_editions`); its per-RR mentions/initiatives merge into the
+  watch list — never blank-overwriting a captured value, but a newer edition may
+  update the "current" initiative. A **one-time backfill** parses the older
+  editions already synced so historical initiatives are recovered. (No special
+  path: on the first run nothing is marked parsed, so every synced edition is
+  parsed once; thereafter only a brand-new edition is.)
 - **Backfill fills WATCHED RRs only** — completes initiatives/mentions for RRs
   already on the watch list; does NOT add new RRs discovered in old editions
   (avoids resurrecting RRs no longer in focus).
 - Each watched RR keeps an accumulated `mentions_seen` history
-  (`{edition, date, initiative, source}`); `market_initiative` = the most recent
-  non-blank. The **dashboard** (below) renders this accumulated history.
+  (`{edition, kind, label, meeting_date, initiative, initiative_citation,
+  source}`); `market_initiative` = the newest-dated edition that names one
+  (`metadata_store.current_initiative`). The **dashboard** (below) renders it.
+
+**Code:** `local_source.all_cuf_editions/all_suf_editions`,
+`metadata_store.{is_edition_parsed,mark_edition_parsed,add_watched_mention,current_initiative}`,
+`main.{accumulate_watch_list_initiatives,_enrich_relevant_from_watch_list}`
+(called in `run` after `_refresh_watch_list`). Tests in
+`test_metadata_store.py`, `test_local_source.py`, `test_run_watch_list.py`.
+
+**Verified on real synced data (2026-07-22, read-only probe):** recovered
+RR623 (`release in Fall 2026`, from SUF April) and RR728 (`2026 Settlements
+Fall Bundle`, CUF June+July) across editions. **RR750 stays blank — the
+premise that it was "named in an earlier edition" was wrong.** RR750 has ONE
+mention total (SUF April), tied to *"RTO Expansion Project"*, and appears in NO
+CUF Settlement Releases slide — there is no seasonal bundle/Market-Initiative
+label to recover. RR720 (CHILL) and RR748 likewise have no seasonal label in
+any synced edition. **Open question for Elizabeth/Kashmita:** should a project
+name like "RTO Expansion Project" count as RR750's initiative? Not hardcoded —
+the locked rule is verbatim-from-slide, never invent. NOTE: SPP synced the July
+CUF under two filenames (both dated 20260716) → two edition entries for the same
+meeting; harmless (same initiative, deduped per edition key).
 - **Dashboard format:** an HTML page in `Reports/` **dated per generation and
   accumulating like the briefing** (a snapshot each run, not overwritten) — so
   the evolution of the tracked state is on record. (Story workbooks still use

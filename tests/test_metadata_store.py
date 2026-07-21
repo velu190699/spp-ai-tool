@@ -1,6 +1,6 @@
 import json
 
-from src.state.metadata_store import MetadataStore
+from src.state.metadata_store import MetadataStore, current_initiative
 
 
 def test_metadata_store_detects_new_duplicate_and_hash_change(tmp_path):
@@ -88,6 +88,57 @@ def test_watch_list_survives_save_reload(tmp_path):
     store.save()
     reloaded = MetadataStore(path)
     assert reloaded.get_watched("786")["market_initiative"] == "X"
+
+
+def test_current_initiative_picks_newest_dated_non_blank():
+    assert current_initiative([]) == ("", "")
+    # Only an older edition names it; a newer silent edition must not blank it.
+    history = [
+        {"edition": "CUF|old", "meeting_date": "2026-05-21", "initiative": "2026 Settlements Fall Bundle", "initiative_citation": "old.pdf:p6"},
+        {"edition": "CUF|new", "meeting_date": "2026-07-16", "initiative": "", "initiative_citation": ""},
+    ]
+    assert current_initiative(history) == ("2026 Settlements Fall Bundle", "old.pdf:p6")
+    # A newer edition that DOES name one updates the current initiative.
+    history.append({"edition": "SUF|newer", "meeting_date": "2026-08-01", "initiative": "Spring 2027 Bundle", "initiative_citation": "s.pdf:p2"})
+    assert current_initiative(history) == ("Spring 2027 Bundle", "s.pdf:p2")
+
+
+def test_parsed_editions_registry_tracks_once(tmp_path):
+    store = MetadataStore(tmp_path / "m.json")
+    assert not store.is_edition_parsed("CUF|July")
+    store.mark_edition_parsed("CUF|July", {"pdfs": 3})
+    assert store.is_edition_parsed("CUF|July")
+    # Survives save/reload.
+    store.save()
+    assert MetadataStore(tmp_path / "m.json").is_edition_parsed("CUF|July")
+
+
+def test_add_watched_mention_recovers_initiative_from_older_edition(tmp_path):
+    store = MetadataStore(tmp_path / "m.json")
+    # RR750 is watched but its latest-edition initiative came up blank.
+    store.upsert_watched("750", {"title": "MSR", "market_initiative": "", "status": "open"})
+
+    # An OLDER edition named the initiative — accumulation recovers it.
+    store.add_watched_mention("750", {
+        "edition": "CUF|old", "meeting_date": "2026-05-21",
+        "initiative": "2026 Settlements Fall Bundle", "initiative_citation": "old.pdf:p6",
+    })
+    assert store.get_watched("750")["market_initiative"] == "2026 Settlements Fall Bundle"
+    assert len(store.get_watched("750")["mentions_seen"]) == 1
+
+    # Re-recording the SAME edition is idempotent (deduped by edition key).
+    store.add_watched_mention("750", {
+        "edition": "CUF|old", "meeting_date": "2026-05-21",
+        "initiative": "2026 Settlements Fall Bundle", "initiative_citation": "old.pdf:p6",
+    })
+    assert len(store.get_watched("750")["mentions_seen"]) == 1
+
+
+def test_add_watched_mention_is_noop_for_unwatched_rr(tmp_path):
+    store = MetadataStore(tmp_path / "m.json")
+    # Backfill fills watched RRs only — an RR seen only in an old edition is skipped.
+    assert store.add_watched_mention("999", {"edition": "CUF|old", "initiative": "X"}) is None
+    assert store.get_watched("999") is None
 
 
 def test_relevant_rrs_roundtrip_and_atomic_save(tmp_path):

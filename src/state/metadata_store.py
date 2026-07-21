@@ -19,6 +19,27 @@ class DocumentCheck:
     existing: dict[str, Any] | None
 
 
+def current_initiative(mentions_seen: list[dict[str, Any]]) -> tuple[str, str]:
+    """The market initiative from the NEWEST-dated mention that names one.
+
+    Each ``mentions_seen`` entry is one CUF/SUF edition that mentioned the RR,
+    carrying ``meeting_date`` (ISO, sortable), ``initiative`` and
+    ``initiative_citation``. A later edition updates the current initiative; a
+    silent edition (blank initiative) never blanks a value an earlier edition
+    captured. Returns ``("", "")`` when no edition named one.
+    """
+    best_key: tuple[str, str] | None = None
+    best: tuple[str, str] = ("", "")
+    for entry in mentions_seen:
+        if not entry.get("initiative"):
+            continue
+        key = (entry.get("meeting_date") or "", entry.get("edition") or "")
+        if best_key is None or key >= best_key:
+            best_key = key
+            best = (entry.get("initiative", ""), entry.get("initiative_citation", ""))
+    return best
+
+
 class MetadataStore:
     """JSON ledger of every document the tool has seen and every analysis it ran.
 
@@ -175,6 +196,43 @@ class MetadataStore:
 
     def remove_watched(self, rr_number: str) -> None:
         self.data.setdefault("watched_rrs", {}).pop(rr_number, None)
+
+    # ------------------------------------------------------------------
+    # Initiative accumulation across CUF/SUF editions (Option B). Each edition is
+    # parsed ONCE (tracked here); a watched RR keeps a per-edition mentions_seen
+    # history so an initiative named only in an OLDER edition (e.g. RR750) is
+    # recovered, and its "current" initiative is the newest edition that names one.
+    # ------------------------------------------------------------------
+
+    def is_edition_parsed(self, edition_key: str) -> bool:
+        return edition_key in self.data.get("parsed_editions", {})
+
+    def mark_edition_parsed(self, edition_key: str, meta: dict[str, Any] | None = None) -> None:
+        now = datetime.now(timezone.utc).isoformat()
+        self.data.setdefault("parsed_editions", {})[edition_key] = {**(meta or {}), "parsed_at": now}
+
+    def add_watched_mention(self, rr_number: str, entry: dict[str, Any]) -> dict[str, Any] | None:
+        """Record one edition's mention of a WATCHED RR and refresh its initiative.
+
+        No-op if the RR isn't watched: the backfill fills watched RRs only, never
+        resurrecting an RR discovered solely in an old edition. Dedupes by
+        ``edition`` so re-accumulation is idempotent, then recomputes
+        ``market_initiative`` from :func:`current_initiative` — a later edition
+        updates it, a silent edition never blanks it.
+        """
+        watched = self.data.setdefault("watched_rrs", {}).get(str(rr_number))
+        if watched is None:
+            return None
+        history = watched.setdefault("mentions_seen", [])
+        edition_key = entry.get("edition", "")
+        history[:] = [h for h in history if h.get("edition") != edition_key]
+        history.append(entry)
+        label, citation = current_initiative(history)
+        if label:
+            watched["market_initiative"] = label
+            watched["market_initiative_citation"] = citation
+        watched["last_seen"] = datetime.now(timezone.utc).isoformat()
+        return watched
 
     def save_mentions(self, family: str, mentions: dict[str, Any]) -> None:
         self.data.setdefault("mentions_cache", {})[family] = mentions

@@ -29,12 +29,18 @@ Large session; **everything committed, working tree clean, 110 tests passing.**
   list. **The Option A gap is closed.** Watch list seeded with the 9 RRs.
 
 ### Next steps (start the fresh chat here)
-1. **Option B remaining** (design locked in RUNBOOK §5, NOT built): (4) initiative
-   **accumulation** across CUF/SUF editions — parse each edition once + one-time
-   backfill of older synced editions, fill WATCHED RRs only, per-RR `mentions_seen`
-   history (fixes RR750's blank initiative, named in an older edition); (5) **RR
-   Control dashboard** — HTML in `Reports/`, dated & accumulating like the briefing;
-   (6) **heartbeat** + **Slack by-area** briefing (RRs under Market Systems).
+1. **Option B remaining** (design locked in RUNBOOK §5):
+   - ✅ **(4) initiative accumulation** across CUF/SUF editions — DONE 2026-07-22.
+     Parse each edition once (`parsed_editions`), one-time backfill (free — nothing
+     marked parsed on first run), WATCHED RRs only, per-RR `mentions_seen` history,
+     `market_initiative` = newest edition that names one. Verified on real data:
+     recovered RR623 + RR728. **RR750 stayed blank — the premise was wrong: it has
+     no seasonal initiative in ANY synced edition (one mention, SUF April, "RTO
+     Expansion Project"), not one hidden in an older edition.** Open Q for
+     Elizabeth/Kashmita: should "RTO Expansion Project" count? See RUNBOOK §5.
+   - **(5) RR Control dashboard** — HTML in `Reports/`, dated & accumulating like
+     the briefing; renders the `mentions_seen` history. NOT built.
+   - **(6) heartbeat** + **Slack by-area** briefing (RRs under Market Systems). NOT built.
 2. A real end-to-end run to exercise the full flow (first run re-downloads sources once).
 3. Confirm with Miquel his sync app reads workbooks from `Stories/BO/`.
 4. Schedule the weekly task (Mon 10:00, "run only when user is logged on").

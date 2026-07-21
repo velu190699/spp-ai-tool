@@ -1,6 +1,8 @@
 from pathlib import Path
 
 from src.documents.local_source import (
+    all_cuf_editions,
+    all_suf_editions,
     latest_cuf_edition,
     latest_suf_edition,
     meeting_date_from_name,
@@ -78,3 +80,30 @@ def test_latest_suf_edition_picks_newest_pdf(tmp_path):
 def test_missing_dirs_return_none(tmp_path):
     assert latest_cuf_edition(tmp_path / "nope", tmp_path, "u") is None
     assert latest_suf_edition(tmp_path / "nope", tmp_path, "u") is None
+
+
+def test_all_cuf_editions_returns_every_folder_oldest_first(tmp_path):
+    cuf_dir = tmp_path / "CUF"
+    older = cuf_dir / "CUF Meeting Materials 20260521_20260515"
+    newer = cuf_dir / "CUF Meeting Materials 20260618_20260612"
+    for folder in (newer, older):  # create out of order; helper must sort
+        folder.mkdir(parents=True)
+        (folder / "Agenda.pdf").write_text("x", encoding="utf-8")
+
+    editions = all_cuf_editions(cuf_dir, tmp_path, "https://x/base")
+    assert [e.label for e in editions] == [
+        "CUF Meeting Materials 20260521_20260515",
+        "CUF Meeting Materials 20260618_20260612",
+    ]
+    assert all_cuf_editions(tmp_path / "nope", tmp_path, "u") == []
+
+
+def test_all_suf_editions_returns_every_pdf_oldest_first(tmp_path):
+    suf_dir = tmp_path / "SUF"
+    suf_dir.mkdir()
+    (suf_dir / "SUF Meeting Materials 20260409_20260402.pdf").write_text("x", encoding="utf-8")
+    (suf_dir / "SUF Meeting Materials 20260109_20260102.pdf").write_text("x", encoding="utf-8")
+
+    editions = all_suf_editions(suf_dir, tmp_path, "https://x/base")
+    assert [e.meeting_date.strftime("%Y-%m-%d") for e in editions] == ["2026-01-09", "2026-04-09"]
+    assert all_suf_editions(tmp_path / "nope", tmp_path, "u") == []
