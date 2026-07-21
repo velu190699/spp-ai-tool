@@ -139,6 +139,27 @@ Recommendation Report while it is still open, the change is **missed**.
 > locked with Elizabeth ("relevance = latest CUF/SUF editions only") — inform her
 > as a courtesy, but implementation is green-lit.
 
+### Initiative accumulation across CUF/SUF editions 🎯 (2026-07-21)
+
+An RR's market initiative may be named in an OLDER CUF/SUF edition than the one
+the tool parses (it reads only the latest for relevance). RR750 is the symptom:
+blank initiative because it was named in an earlier edition. Decisions:
+- **Accumulate facts across editions.** Each CUF/SUF edition is parsed **once**
+  (tracked as parsed); its per-RR mentions/initiatives merge into the watch list
+  — never blank-overwriting a captured value, but a newer edition may update the
+  "current" initiative. A **one-time backfill** parses the older editions already
+  synced so historical initiatives (e.g. RR750's) are recovered.
+- **Backfill fills WATCHED RRs only** — completes initiatives/mentions for RRs
+  already on the watch list; does NOT add new RRs discovered in old editions
+  (avoids resurrecting RRs no longer in focus).
+- Each watched RR keeps an accumulated `mentions_seen` history
+  (`{edition, date, initiative, source}`); `market_initiative` = the most recent
+  non-blank. The **dashboard** (below) renders this accumulated history.
+- **Dashboard format:** an HTML page in `Reports/` **dated per generation and
+  accumulating like the briefing** (a snapshot each run, not overwritten) — so
+  the evolution of the tracked state is on record. (Story workbooks still use
+  stable-name + overwrite for corrections; different artifact, different policy.)
+
 ### RR data model & outputs (clarified 2026-07-21)
 
 - 🎯 **RR Control report** (persistent, from the watch list): one row per watched
