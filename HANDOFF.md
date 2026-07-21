@@ -1,15 +1,53 @@
 # SPP AI Tool — Session Handoff
 
-_Snapshot for picking this project up in a fresh chat. Written 2026-07-20,
-reconciling the 2026-07-17 screenshot/links rework (tested, see below)._
+_Snapshot for picking this project up in a fresh chat. Updated 2026-07-21._
+
+## Latest session — 2026-07-21 (read this first)
+
+Large session; **everything committed, working tree clean, 110 tests passing.**
+`RUNBOOK.md` is the canonical design doc. Highlights:
+
+- **Crop fixes shipped** (`5c77ecc`, `75c92f8`): RR728-27 no longer swallows the
+  next sub-determinant's IF/THEN; RR750 `#RtAdjMtr5minQty` no longer truncates at
+  a redline inside open brackets (bracket-depth gate). Word COM render hardened
+  with transient-error retries. RR728 + RR750 workbooks regenerated + republished
+  corrected in `Stories/BO/`.
+- **Synced library RESTRUCTURED + migrated** (`60e113b`): market-at-top,
+  self-contained. New layout `${SPP_SYNC_ROOT}/SPPIM/{Published Documents,
+  Reports/{Briefings,Summaries/{BO,FO}}, Stories/{BO,FO}, State}`. Every synced
+  path is DERIVED in `config.py` from `SPP_SYNC_ROOT` (.env) + `market`
+  (config.yaml, default SPPIM) — a teammate edits ONLY `SPP_SYNC_ROOT`. Files
+  moved (reversible); old top-level `Reports/`, `Story templates/`, `State/`
+  removed. **Follow-up:** the ledger still records pre-move local paths, so the
+  next real run re-downloads the source files ONCE and re-records them
+  (hash-guarded — nothing reprocesses).
+- **Option B APPROVED (Elizabeth) + CORE IMPLEMENTED** (`3496b85`, `4cfe134`,
+  `921fdcd`): watch list in state; `run` seeds it, fetches every watched-OPEN
+  RR's Recommendation Report, and rebuilds the briefing ONLY on a new CUF/SUF
+  edition; settlement scopes to the watch list (reprocess on Recommendation-Report
+  change; final-capture-then-prune on close); initiatives come from the watch
+  list. **The Option A gap is closed.** Watch list seeded with the 9 RRs.
+
+### Next steps (start the fresh chat here)
+1. **Option B remaining** (design locked in RUNBOOK §5, NOT built): (4) initiative
+   **accumulation** across CUF/SUF editions — parse each edition once + one-time
+   backfill of older synced editions, fill WATCHED RRs only, per-RR `mentions_seen`
+   history (fixes RR750's blank initiative, named in an older edition); (5) **RR
+   Control dashboard** — HTML in `Reports/`, dated & accumulating like the briefing;
+   (6) **heartbeat** + **Slack by-area** briefing (RRs under Market Systems).
+2. A real end-to-end run to exercise the full flow (first run re-downloads sources once).
+3. Confirm with Miquel his sync app reads workbooks from `Stories/BO/`.
+4. Schedule the weekly task (Mon 10:00, "run only when user is logged on").
+
+_Everything below predates 2026-07-21 and is kept for background; RUNBOOK.md supersedes it where they differ._
 
 ## What this project is
 
-> **Operational flow (when each piece runs, change→report mapping, schedule) is
-> documented in `RUNBOOK.md` (2026-07-21).** It also records the agreed 🎯 target
-> redesign (Option B watch list + decoupled triggers + heartbeat) that is NOT yet
-> implemented and pending Elizabeth's sign-off. The description below is current
-> behavior.
+> **Operational flow (when each piece runs, change→report mapping, folder layout,
+> schedule) is documented in `RUNBOOK.md`.** Option B is approved and its CORE is
+> implemented (watch list, decoupled triggers, watch-list settlement scoping);
+> accumulation, the RR Control dashboard, and heartbeat/Slack-by-area remain (see
+> the session note above and RUNBOOK §5).
 
 An unattended agent for PCI's Market Systems team that monitors SPP regulatory
 filings so nobody checks spp.org by hand. Three CLI commands off `main.py`:
