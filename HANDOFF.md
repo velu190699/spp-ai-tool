@@ -5,6 +5,12 @@ reconciling the 2026-07-17 screenshot/links rework (tested, see below)._
 
 ## What this project is
 
+> **Operational flow (when each piece runs, change→report mapping, schedule) is
+> documented in `RUNBOOK.md` (2026-07-21).** It also records the agreed 🎯 target
+> redesign (Option B watch list + decoupled triggers + heartbeat) that is NOT yet
+> implemented and pending Elizabeth's sign-off. The description below is current
+> behavior.
+
 An unattended agent for PCI's Market Systems team that monitors SPP regulatory
 filings so nobody checks spp.org by hand. Three CLI commands off `main.py`:
 
@@ -135,16 +141,39 @@ natural next step before trusting the crops. Tunable constants live at the top o
 2. ~~Visually verify the screenshots~~ **DONE** — crops reviewed and approved by
    Elizabeth 2026-07-20 across RR728/RR623/RR748. Block-detection tunables are at
    the top of `screenshots.py` if a future RR needs adjustment.
-3. **NEXT: manual end-to-end validation run**, then schedule WEEKLY. Elizabeth
-   wants the pipeline scheduled to run once a week; before scheduling, do one full
-   manual run to confirm the unattended flow works on this laptop:
+3. **Word COM markup render: VALIDATED locally 2026-07-20** across RR623/RR728/RR748
+   (interactive session). Three fixes landed this session (all UNCOMMITTED),
+   suite now **102 passing**:
+   - **Transient COM retry** on `render_pdf_with_word`: cold-start `Call was
+     rejected by callee` (RPC_E_CALL_REJECTED) is retried 3× with backoff via a
+     fresh instance (`_is_transient_com_error` + `_render_pdf_once`).
+   - **Per-call COM retry** (`_com_call`): the post-Open calls (ActiveWindow.View,
+     Export) are rejected while Word lays out a LARGER doc — RR748 failed 100% at
+     the markup-view step until this. Restarting the whole render did NOT help
+     (fresh instance busy at the same point); a short in-place wait does. This is
+     what rescued RR748 (was silently producing 0 crops).
+   - **Crop block-boundary fix** (`screenshots._starts_next_header`): a
+     determinant's one-line formula no longer absorbs the NEXT sub-determinant's
+     "(b.2.1) IF … THEN" header. Fixes Elizabeth's flag that RR728-27b was a lone
+     "THEN"; item 27 is now a single complete crop, item 28 unchanged. RR623/RR748
+     crops byte-identical (fix is a no-op there). Tests in `test_screenshots.py`.
+   Crops re-validated: RR623=14, RR728=39 (was 40; the bogus 27b gone), RR748=2.
+   **RE-APPROVAL:** only RR728-27 changed vs Elizabeth's 2026-07-20 approval (it's
+   strictly better — one complete crop instead of a split ending in a lone THEN);
+   worth a quick confirm with her.
+   **STILL OPEN before scheduling WEEKLY:**
+   - Decide the Scheduled Task mode. The TRUE headless case ("run whether user is
+     logged on or not" = session 0, no desktop) is UNVALIDATED and Word COM usually
+     fails hard there. Recommended: **"run only when user is logged on"** (real
+     desktop session; retry fix covers cold-start flakiness). Eduardo: DECIDE LATER.
+   - The full manual end-to-end (`run` + `settlement-report --call-claude --stories`)
+     was NOT run this session — in steady state all 9 relevant RRs are already in the
+     ledger, so a real settlement run does nothing unless forced with `--files`/`--all`.
+     Note SPP RENAMED CUF doc 77179 → "CUF July 2026 Meeting Materials 20260716.zip";
+     a real `run` will re-cross (same 9 RRs) and re-emit the LLM HTML report.
        python main.py run                                       # fetch new RRs from spp.org
        python main.py settlement-report --call-claude --stories # report + per-RR workbooks
-   Watch the **Word COM markup render** — a headless Windows Scheduled Task
-   ("run whether user is logged on or not") may not give Word a usable session;
-   validate that before trusting the schedule. Cost is bounded: the ledger only
-   LLM-processes RRs not already recorded. (This step was moved out of the old
-   #3 numbering below.)
+   Cost is bounded: the ledger only LLM-processes RRs not already recorded.
 3. **`config/pci_vocabulary.yaml`** — skeleton exists, all commented out.
    Elizabeth + Kashmita fill it ("add calculation class", "shadow calculation",
    "copy value from statement", 3-decimal rounding). Injected automatically when
