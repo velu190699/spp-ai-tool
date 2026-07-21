@@ -292,6 +292,45 @@ def process_recommendation_reports(
     return stored_reports
 
 
+def _refresh_watch_list(state: MetadataStore, relevant_rrs: list[dict[str, Any]], open_rrs: dict[str, RRRecord]) -> list[dict[str, Any]]:
+    """Seed/refresh the settlement watch list and return the OPEN RRs to fetch.
+
+    Option B: the CUF/SUF cross-reference only DISCOVERS an RR and names its
+    market initiative — captured here, once. From then on the RR is watched by
+    Recommendation-Report change for as long as the RR Master List shows it open,
+    so a late revision to an RR that fell out of the newest materials is still
+    fetched. Each watched RR's open/closed status is refreshed from the master
+    list (a closed RR gets one final capture downstream, then is removed).
+
+    Returns download descriptors for every watched, still-open RR — a superset of
+    the latest relevant list — so `process_recommendation_reports` fetches them.
+    """
+    for rr in relevant_rrs:
+        state.upsert_watched(str(rr.get("rr_number")), {
+            "title": rr.get("title", ""),
+            "primary_working_group": rr.get("primary_working_group", ""),
+            "market_initiative": rr.get("market_initiative", ""),
+            "market_initiative_citation": rr.get("market_initiative_citation", ""),
+            "search_url": rr.get("search_url", ""),
+            "domain": "BO",
+            "status": "open",
+        })
+    # Refresh open/closed from the master list (open_rrs holds only OPEN RRs).
+    for watched in state.list_watched():
+        num = watched["rr_number"]
+        state.set_watched_status(num, "open" if num in open_rrs else "closed")
+    return [
+        {
+            "rr_number": w["rr_number"],
+            "title": w.get("title", ""),
+            "search_url": w.get("search_url", ""),
+            "market_initiative": w.get("market_initiative", ""),
+            "primary_working_group": w.get("primary_working_group", ""),
+        }
+        for w in state.list_watched(status="open")
+    ]
+
+
 def run(dry_run: bool) -> int:
     config = load_config()
     ensure_runtime_dirs(config)
@@ -460,8 +499,13 @@ def run(dry_run: bool) -> int:
     else:
         LOGGER.info("No changes detected — reusing last known relevant RRs")
         relevant_rrs = state.load_relevant_rrs() or _load_latest_relevant_rrs(config.reports_dir)
+    # Option B: fetch the Recommendation Report of every WATCHED, still-OPEN RR
+    # (a superset of the latest relevant list), so a late revision to an RR that
+    # dropped out of the newest CUF/SUF is still caught. dry-run keeps its
+    # discovery-only view over the relevant list and never mutates the watch list.
+    download_rrs = relevant_rrs if dry_run else _refresh_watch_list(state, relevant_rrs, open_rrs)
     reports = [] if dry_run else process_recommendation_reports(
-        relevant_rrs=relevant_rrs,
+        relevant_rrs=download_rrs,
         client=client,
         state=state,
         config=config,
@@ -470,14 +514,21 @@ def run(dry_run: bool) -> int:
         skipped=skipped,
     )
     discovered["recommendation_reports"] = reports
+    # Carry any UPDATE flag back onto the CUF/SUF relevant list so the briefing's
+    # RR badges still reflect a re-published Recommendation Report.
+    updated_nums = {str(r["rr_number"]) for r in download_rrs if r.get("updated")}
+    for rr in relevant_rrs:
+        if str(rr.get("rr_number")) in updated_nums:
+            rr["updated"] = True
 
     log_slack_draft(relevant_rrs, warnings)
 
-    # Connect the automated flow to Slack. The manual `report` command notifies
-    # too, but `run` is the unattended path, so it publishes the HTML report and
-    # posts it (with the RR list) whenever something changed — no ping on a
-    # no-op run. Skipped on dry runs.
-    if not dry_run and (any_change or relevant_rrs):
+    # Decoupled triggers (Option B): the all-teams HTML briefing is rebuilt and
+    # posted ONLY when a new CUF/SUF edition arrived — its content is
+    # slide-derived, so an RR-only change never rebuilds it (RR changes travel
+    # via the settlement outputs instead). dry runs never notify. (Heartbeat for
+    # a truly no-change run lands with the notification rework.)
+    if not dry_run and (cuf_is_new or suf_is_new):
         notify_slack_report(config, warnings, run_id, relevant_rrs)
 
     run_summary = build_run_summary(
