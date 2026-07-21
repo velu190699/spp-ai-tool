@@ -129,14 +129,22 @@ natural next step before trusting the crops. Tunable constants live at the top o
 
 ## Immediate next steps
 
-1. **Commit the 2026-07-17 + 2026-07-20 rework** — tested (93 passing) but still
-   uncommitted; don't lose it. Includes `screenshots.py`, the enriched Slack
-   sender, and the SKILL/HANDOFF updates. Decide whether to track Miquel's
-   `Story Creation Process_*.pdf` guide (recommended — it is the screenshot-sheet
-   contract; consider a cleaner filename).
+1. ~~Commit the rework~~ **DONE** — committed 2026-07-20 (`044ea8f` code + tests +
+   Miquel's guide PDF; `72e1e7f` skill/handoff docs) and pushed to origin/master.
+   93 pytest passing.
 2. ~~Visually verify the screenshots~~ **DONE** — crops reviewed and approved by
    Elizabeth 2026-07-20 across RR728/RR623/RR748. Block-detection tunables are at
    the top of `screenshots.py` if a future RR needs adjustment.
+3. **NEXT: manual end-to-end validation run**, then schedule WEEKLY. Elizabeth
+   wants the pipeline scheduled to run once a week; before scheduling, do one full
+   manual run to confirm the unattended flow works on this laptop:
+       python main.py run                                       # fetch new RRs from spp.org
+       python main.py settlement-report --call-claude --stories # report + per-RR workbooks
+   Watch the **Word COM markup render** — a headless Windows Scheduled Task
+   ("run whether user is logged on or not") may not give Word a usable session;
+   validate that before trusting the schedule. Cost is bounded: the ledger only
+   LLM-processes RRs not already recorded. (This step was moved out of the old
+   #3 numbering below.)
 3. **`config/pci_vocabulary.yaml`** — skeleton exists, all commented out.
    Elizabeth + Kashmita fill it ("add calculation class", "shadow calculation",
    "copy value from statement", 3-decimal rounding). Injected automatically when
