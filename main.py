@@ -770,11 +770,14 @@ def generate_settlement_report(
     state = MetadataStore(config.state_file, legacy_path=Path("data/state/metadata.json"))
     relevant = state.load_relevant_rrs() or _load_latest_relevant_rrs(config.reports_dir)
 
-    # No --files/--links given: process the RRs from the CURRENT relevant list
-    # (latest CUF/SUF cross-reference) that the ledger hasn't seen at this
-    # content version yet — already-processed RRs keep their existing outputs
-    # and are skipped. --all overrides both filters (full re-run over the cache).
+    # No --files/--links given: process the WATCH LIST (Option B). Every RR that
+    # CUF/SUF ever surfaced and the master list still shows open is tracked; we
+    # (re)process one only when its Recommendation Report changed since the
+    # ledger last saw it. An RR that has flipped to closed gets one final pass
+    # this run, then is pruned from the watch list. --all overrides both filters
+    # (full re-run over the cache, ignoring the watch list and the ledger).
     analysis_records: list[tuple[str, str]] = []  # (rr_key, input_hash) to record on success
+    closed_to_prune: list[str] = []               # watched RRs now closed -> drop after this run
     if not files and not links:
         candidates = _latest_rr_docx_files(config.recommendation_reports_dir)
         if not candidates:
@@ -782,40 +785,54 @@ def generate_settlement_report(
                 f"No RR .docx files in {config.recommendation_reports_dir} and no "
                 "--files/--links given. Run `python main.py run` first, or pass one explicitly."
             )
-        relevant_nums = {str(rr.get("rr_number")) for rr in relevant}
+        watched = {w["rr_number"]: w for w in state.list_watched()}
         files = []
         for path in candidates:
             rr_num = _rr_number_of_path(path)
-            if not process_all and relevant_nums and rr_num not in relevant_nums:
-                LOGGER.info("RR%s: not in the latest CUF/SUF relevant list — skipped (use --all to include)", rr_num or "?")
+            entry = watched.get(rr_num)
+            if not process_all and entry is None:
+                LOGGER.info("RR%s: not on the settlement watch list — skipped (use --all to include)", rr_num or "?")
                 continue
+            if entry and entry.get("status") == "closed":
+                closed_to_prune.append(rr_num)  # final pass this run, then unwatch
             input_hash = sha256_file(Path(path))
             ledger = state.check_analysis("settlement_report", f"RR{rr_num}", input_hash)
             if not process_all and ledger == "unchanged":
-                LOGGER.info("RR%s: already processed at this content version — skipped (use --all to include)", rr_num)
+                LOGGER.info("RR%s: Recommendation Report unchanged since last processing — skipped", rr_num)
                 continue
             if ledger == "updated":
-                LOGGER.info("RR%s: content changed since last processing — re-analyzing (UPDATE)", rr_num)
+                LOGGER.info("RR%s: Recommendation Report changed since last processing — re-analyzing (UPDATE)", rr_num)
             files.append(path)
             analysis_records.append((f"RR{rr_num}", input_hash))
         if not files:
-            LOGGER.info("Nothing new to process — all relevant RRs are already in the ledger. Use --all to regenerate.")
+            for rr_num in closed_to_prune:
+                state.remove_watched(rr_num)
+            if closed_to_prune:
+                state.save()
+                LOGGER.info("Pruned closed RR(s) from the watch list: %s", ", ".join(closed_to_prune))
+            else:
+                LOGGER.info("Nothing new to process — all watched RRs are current in the ledger. Use --all to regenerate.")
             return 0
         LOGGER.info("Processing %d new/updated RR docx file(s)", len(files))
 
     run_id = datetime.now().strftime("%Y%m%d-%H%M%S")
     out_path = out or str(config.settlement_reports_dir / f"SPP_RR_Report_Summary-{run_id}.xlsx")
 
-    # RR -> market initiative comes from the run pipeline's CUF/SUF
-    # cross-reference (the slide names the initiative; the RR docx doesn't).
+    # RR -> market initiative: from the WATCH LIST, where each RR's initiative was
+    # captured once when CUF/SUF first named it — so an RR no longer in the latest
+    # materials keeps its initiative. Falls back to the relevant list for a manual
+    # --files run on an RR not yet watched.
     initiatives = {
-        str(rr.get("rr_number")): {
-            "label": rr.get("market_initiative", ""),
-            "citation": rr.get("market_initiative_citation", ""),
-        }
-        for rr in relevant
-        if rr.get("market_initiative")
+        w["rr_number"]: {"label": w.get("market_initiative", ""), "citation": w.get("market_initiative_citation", "")}
+        for w in state.list_watched() if w.get("market_initiative")
     }
+    for rr in relevant:
+        num = str(rr.get("rr_number"))
+        if num not in initiatives and rr.get("market_initiative"):
+            initiatives[num] = {
+                "label": rr.get("market_initiative", ""),
+                "citation": rr.get("market_initiative_citation", ""),
+            }
 
     engine = build_engine(config.report_engine, binary=config.claude_code_binary, model=config.report_model) if call_claude else None
     _, results = settlement_pipeline.run(
@@ -862,7 +879,12 @@ def generate_settlement_report(
     # skips these RRs until SPP re-publishes them (UPDATE detection).
     for rr_key, input_hash in analysis_records:
         state.record_analysis("settlement_report", rr_key, input_hash, {"report": published_path})
-    if analysis_records:
+    # Prune RRs that closed: their final pass is done, stop watching them.
+    for rr_num in closed_to_prune:
+        state.remove_watched(rr_num)
+    if closed_to_prune:
+        LOGGER.info("Pruned closed RR(s) from the watch list after final capture: %s", ", ".join(closed_to_prune))
+    if analysis_records or closed_to_prune:
         state.save()
 
     # Story workbooks are PAUSED by default (Elizabeth, 2026-07-15) until the
