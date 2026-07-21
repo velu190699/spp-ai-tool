@@ -73,36 +73,41 @@ def load_config(path: str = "config.yaml") -> AppConfig:
     sharepoint = raw.get("sharepoint", {})
     report = raw.get("report", {})
     slack = raw.get("slack", {})
+    # One per-machine variable drives every synced location: SPP_SYNC_ROOT (set
+    # in each person's .env) is the library root; `market` (config.yaml, default
+    # SPPIM) is the per-market folder under it. Every synced subfolder below is
+    # DERIVED from ROOT/market + a fixed layout, so a teammate only edits
+    # SPP_SYNC_ROOT and the rest concatenates. Local (repo) working dirs stay in
+    # config.yaml. Layout: <root>/<market>/{Published Documents,Reports,Stories,State}.
+    sync_root = _expand_path(sharepoint.get("sync_root", ""))
+    market = str(raw.get("market") or os.getenv("SPP_MARKET", "") or "SPPIM").strip()
+    base = sync_root / market
+    docs = base / "Published Documents"   # raw SPP source materials the tool ingests
+    reports_root = base / "Reports"       # published outputs, split by type
     return AppConfig(
-        cuf_dir=_expand_path(paths.get("cuf_dir", "data/CUF")),
-        suf_dir=_expand_path(paths.get("suf_dir", "data/SUF")),
-        protocols_dir=_expand_path(paths.get("protocols_dir", "data/Protocols")),
-        recommendation_reports_dir=_expand_path(paths.get("recommendation_reports_dir", "data/Recommendation_Reports")),
-        rr_master_list_dir=_expand_path(paths.get("rr_master_list_dir", "data/RR_Master_List")),
-        state_file=_expand_path(paths.get("state_file", "data/state/metadata.json")),
+        cuf_dir=docs / "CUF",
+        suf_dir=docs / "SUF",
+        protocols_dir=docs / "Protocols",
+        recommendation_reports_dir=docs / "Recommendation_Reports",
+        rr_master_list_dir=docs / "RR_Master_List",
+        state_file=base / "State" / "metadata.json",
         # SME-editable area->topic routing for the summary report (P0-1). Kept
         # in a YAML so Kashmita's corrections land without a code change.
         area_routing_file=_expand_path(paths.get("area_routing_file", "config/area_routing.yaml")),
         reports_dir=_expand_path(paths.get("reports_dir", "data/reports")),
-        # Where the final HTML report is published. Defaults to reports_dir so
-        # runs without this key keep their old behavior; set it to the synced
-        # SharePoint "Reports" folder to publish there.
-        published_reports_dir=_expand_path(paths.get("published_reports_dir", paths.get("reports_dir", "data/reports"))),
+        # HTML briefing -> Reports/Briefings; settlement summary -> Reports/Summaries/BO;
+        # story workbooks -> Stories/BO. FO gets its own peers later. Working
+        # artifacts (stories JSON, images, rendered PDFs) STAY under the local
+        # settlement_reports_dir — only finished outputs are published.
+        published_reports_dir=reports_root / "Briefings",
         settlement_reports_dir=_expand_path(paths.get("settlement_reports_dir", "data/reports/settlement")),
-        # Where the final settlement xlsx is published (synced SharePoint folder).
-        # Working artifacts (stories JSON, images, rendered PDFs) STAY in
-        # settlement_reports_dir — only the report itself is copied out, so the
-        # team's folder never collects pipeline internals. Defaults to
-        # settlement_reports_dir so runs without this key keep their old behavior.
-        published_settlement_reports_dir=_expand_path(
-            paths.get("published_settlement_reports_dir",
-                      paths.get("settlement_reports_dir", "data/reports/settlement"))),
+        published_settlement_reports_dir=reports_root / "Summaries" / "BO",
         jira_template_file=_expand_path(paths.get("jira_template_file", "templates/Jira_Story_Creator_template.xlsx")),
-        jira_stories_dir=_expand_path(paths.get("jira_stories_dir", "data/reports/jira_stories")),
+        jira_stories_dir=base / "Stories" / "BO",
         logs_dir=_expand_path(paths.get("logs_dir", "logs")),
         logging_level=str(logging.get("level", "INFO")).upper(),
         sharepoint_base_url=str(sharepoint.get("base_url", "")).rstrip("/"),
-        sharepoint_sync_root=_expand_path(sharepoint.get("sync_root", "")),
+        sharepoint_sync_root=sync_root,
         # Microsoft Graph credentials for the RR settlement pipeline's --links
         # mode (live SharePoint share-link download). Secrets only, no
         # config.yaml fallback — set them in .env, same as Slack's tokens.

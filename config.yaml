@@ -3,34 +3,20 @@
 # .env (gitignored) to the local path where the "Market Systems - ISO Agent
 # Market Updates" SharePoint library is synced, e.g.
 #   SPP_SYNC_ROOT=C:/Users/<you>/OneDrive - PCI Energy Solutions/Market Systems - ISO Agent Market Updates
+# Which market this run serves. All SYNCED locations are derived in config.py as
+#   ${SPP_SYNC_ROOT}/<market>/{Published Documents,Reports,Stories,State}/...
+# so a teammate only sets SPP_SYNC_ROOT in their .env — nothing else. A new
+# market (e.g. CAISO) is just a different value here (or SPP_MARKET in .env).
+market: SPPIM
+
 paths:
-  cuf_dir: "${SPP_SYNC_ROOT}/SPPIM/CUF"
-  suf_dir: "${SPP_SYNC_ROOT}/SPPIM/SUF"
-  protocols_dir: "${SPP_SYNC_ROOT}/SPPIM/Protocols"
-  recommendation_reports_dir: "${SPP_SYNC_ROOT}/SPPIM/Recommendation_Reports"
-  rr_master_list_dir: "${SPP_SYNC_ROOT}/SPPIM/RR_Master_List"
-  # The processing ledger (what was downloaded/analyzed, at which content hash)
-  # lives in the SYNCED folder so every machine that runs the tool shares one
-  # memory. Old repo-local state (data/state/metadata.json) migrates on first run.
-  state_file: "${SPP_SYNC_ROOT}/State/metadata.json"
+  # LOCAL (repo) working dirs only — NOT synced. The synced folders are derived
+  # from SPP_SYNC_ROOT + market (see config.py); do not hard-code them here.
+  # Settlement working artifacts (stories JSON, formula images, rendered PDFs)
+  # stay under settlement_reports_dir and never leave the repo.
   reports_dir: data/reports
-  # Final HTML report is published here (synced SharePoint "Reports" folder).
-  # Market-specific subfolder: the tool is expected to expand beyond SPPIM.
-  published_reports_dir: "${SPP_SYNC_ROOT}/Reports/SPPIM"
-  # SPP_RR_Report_Summary-<timestamp>.xlsx (settlement Jira report) is BUILT here,
-  # along with the pipeline's working artifacts (stories JSON, formula images,
-  # rendered PDFs) — these internals never leave the repo.
   settlement_reports_dir: data/reports/settlement
-  # The finished settlement report xlsx is COPIED here for the team (synced
-  # SharePoint folder). Both Excel outputs — this report and the Jira story
-  # workbooks — live in "Story templates"; the Reports folder is HTML-only
-  # (Eduardo, 2026-07-16).
-  published_settlement_reports_dir: "${SPP_SYNC_ROOT}/Story templates/SPPIM"
-  # Miquel's Jira story workbook: the blank template the writer fills, and the
-  # synced folder where filled story workbooks are published for PM review
-  # (per-market subfolder, same reasoning as published_reports_dir).
   jira_template_file: templates/Jira_Story_Creator_template.xlsx
-  jira_stories_dir: "${SPP_SYNC_ROOT}/Story templates/SPPIM"
   logs_dir: logs
 
 # Maps a local synced SharePoint path to its web URL for report citations.

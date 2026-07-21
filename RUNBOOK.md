@@ -234,43 +234,41 @@ python main.py settlement-report --call-claude --stories
 
 ---
 
-## 10. Folder structure 🎯 (target agreed 2026-07-21; migration pending Elizabeth)
+## 10. Folder structure ✅ (migrated 2026-07-21, approved by Elizabeth)
 
-**Problems with the current synced layout:** market placed inconsistently
-(inputs under `SPPIM/<category>`, outputs under `<category>/SPPIM`); reports
-split across two roots (`Reports/` HTML + `Story templates/` xlsx); timestamped
-filenames accumulate and a correction leaves the stale file beside the good one;
-one briefing landed loose in `Reports/` outside `SPPIM/`.
+Market at the top, self-contained per market. Executed layout:
+```
+${SPP_SYNC_ROOT}/          <- the ONLY per-machine variable (each person's .env)
+  SPPIM/                   <- `market` (config.yaml, default SPPIM)
+    Published Documents/   CUF/ SUF/ Protocols/ RR_Master_List/ Recommendation_Reports/
+    Reports/
+      Briefings/           SPP_Market_Changes_Summary-*.html   (+ Archive/)
+      Summaries/ BO/       (RR_Control.xlsx once Option B lands; + Archive/)   FO/ (future)
+    Stories/   BO/         RR<id>_Jira_Stories-*.xlsx  (+ Archive/)            FO/ (future)
+    State/     metadata.json
+  CAISO/ …                 (new market = new top-level folder, same subtree)
+```
 
-**Target (market at the top, self-contained per market):**
-```
-${ROOT}/SPPIM/
-  Inputs/    CUF/ SUF/ Protocols/ RR_Master_List/ Recommendation_Reports/
-  Reports/
-    Briefings/   SPP_Market_Changes_Summary.html   (stable name)
-    Summaries/   RR_Control.xlsx                    (persistent master, Option B)
-  Stories/   RR<id>_Jira_Stories.xlsx               (one per RR)
-  State/     metadata.json
-  <any of the above>/Archive/  superseded versions (timestamped)
-${ROOT}/CAISO/ …  (new market = new top-level folder, same subtree)
-```
+**Config — single ROOT variable:** every synced path is derived in `config.py`
+from `SPP_SYNC_ROOT` (`.env`) + `market` (`config.yaml`, default `SPPIM`); a
+teammate edits only `SPP_SYNC_ROOT`. `config.yaml` keeps just the local repo
+working dirs. A new market = change `market` (or set `SPP_MARKET` in `.env`).
 
 **Decisions (2026-07-21):**
-- **Market at the top** — each market a self-contained tree; adding one = a new folder.
-- **Versioning = stable name + `Archive/`** — outputs use a stable filename
-  (overwritten in place, so a correction never leaves a stale duplicate or a dead
-  Slack link); the previous version is moved to a sibling `Archive/` with a
-  timestamp. History also in git + the ledger.
-- **Reports consolidated** under one `Reports/` with `Briefings/` and `Summaries/`.
-- **Template (story workbook) location: UNDECIDED.** Separate `Stories/` folder
-  (recommended — one place for the PM to review all pending workbooks; keeps the
-  append-only RR docx separate from regenerable output) vs. co-located in each
-  RR's folder. Hinges on Miquel's PM-review workflow — confirm with him.
+- Market at the top; each market self-contained.
+- **BO / FO split** under `Stories/` and `Reports/Summaries/` — settlements = BO.
+- Source-docs folder named `Published Documents` (the parent already names the market).
+- Versioning = stable name + `Archive/` (a correction overwrites in place; the
+  prior version moves to a sibling `Archive/`). NOTE: the tool still writes
+  timestamped filenames today — the stable-name + auto-archive behavior lands with
+  the Option B / RR-Control work.
 
-**Migration:** changing the tool's output paths is a config edit; **moving the
-existing files in the shared library needs Elizabeth's OK** (team-folder
-agreement). Done so far: the wrong-crop `RR728_Jira_Stories-20260720` was moved to
-`Story templates/SPPIM/Archive/`. Still to migrate (with Elizabeth): the loose
-`Reports/SPP_Market_Changes_Summary-20260720-100005.html`, old briefings/summaries
-→ `Archive/`, and the overall re-layout above.
-```
+**Migration executed 2026-07-21** (all moves, reversible): inputs → `Published
+Documents/`; briefings → `Reports/Briefings/` (newest kept, 5 older → `Archive/`);
+per-run summaries → `Reports/Summaries/BO/Archive/`; story workbooks → `Stories/BO/`
+(wrong-crop RR728 → `Stories/BO/Archive/`); `State/metadata.json` → `SPPIM/State/`.
+Old top-level `Reports/`, `Story templates/`, `State/` removed. Verified: the tool
+finds every input + the state, 104 tests pass, dry-run clean.
+**Self-healing follow-up:** the shared ledger still records the pre-move local
+paths, so the next real run re-downloads the source files once and re-records them
+(hash-guarded — nothing reprocesses). Left as-is rather than hand-editing the ledger.
