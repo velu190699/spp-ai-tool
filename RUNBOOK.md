@@ -231,4 +231,46 @@ python main.py settlement-report --call-claude --stories
    Monday 10:00.
 5. Downstream backlog (`FEEDBACK_ACTIONS.md`): `pci_vocabulary.yaml`, SME
    questions (Miquel/Kashmita), and the FO spec-diff pipeline (P1).
+
+---
+
+## 10. Folder structure 🎯 (target agreed 2026-07-21; migration pending Elizabeth)
+
+**Problems with the current synced layout:** market placed inconsistently
+(inputs under `SPPIM/<category>`, outputs under `<category>/SPPIM`); reports
+split across two roots (`Reports/` HTML + `Story templates/` xlsx); timestamped
+filenames accumulate and a correction leaves the stale file beside the good one;
+one briefing landed loose in `Reports/` outside `SPPIM/`.
+
+**Target (market at the top, self-contained per market):**
+```
+${ROOT}/SPPIM/
+  Inputs/    CUF/ SUF/ Protocols/ RR_Master_List/ Recommendation_Reports/
+  Reports/
+    Briefings/   SPP_Market_Changes_Summary.html   (stable name)
+    Summaries/   RR_Control.xlsx                    (persistent master, Option B)
+  Stories/   RR<id>_Jira_Stories.xlsx               (one per RR)
+  State/     metadata.json
+  <any of the above>/Archive/  superseded versions (timestamped)
+${ROOT}/CAISO/ …  (new market = new top-level folder, same subtree)
+```
+
+**Decisions (2026-07-21):**
+- **Market at the top** — each market a self-contained tree; adding one = a new folder.
+- **Versioning = stable name + `Archive/`** — outputs use a stable filename
+  (overwritten in place, so a correction never leaves a stale duplicate or a dead
+  Slack link); the previous version is moved to a sibling `Archive/` with a
+  timestamp. History also in git + the ledger.
+- **Reports consolidated** under one `Reports/` with `Briefings/` and `Summaries/`.
+- **Template (story workbook) location: UNDECIDED.** Separate `Stories/` folder
+  (recommended — one place for the PM to review all pending workbooks; keeps the
+  append-only RR docx separate from regenerable output) vs. co-located in each
+  RR's folder. Hinges on Miquel's PM-review workflow — confirm with him.
+
+**Migration:** changing the tool's output paths is a config edit; **moving the
+existing files in the shared library needs Elizabeth's OK** (team-folder
+agreement). Done so far: the wrong-crop `RR728_Jira_Stories-20260720` was moved to
+`Story templates/SPPIM/Archive/`. Still to migrate (with Elizabeth): the loose
+`Reports/SPP_Market_Changes_Summary-20260720-100005.html`, old briefings/summaries
+→ `Archive/`, and the overall re-layout above.
 ```
