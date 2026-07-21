@@ -148,6 +148,50 @@ def test_text_defines_matches_definitions_not_usages():
     assert not S._text_defines(d("RtMwpCpAmt a, s, b, c $ Eligibility RUC Make Whole Payment"), "rtmwpcpamt")
 
 
+def _def_of(text):
+    # Emulate _all_lines: a keyword-opener "def" (IF/THEN/…) is nulled.
+    name = S._def_name(text)
+    return None if (name and S._FORMULA_OPENER.match(name)) else name
+
+
+def test_block_stops_before_next_subdeterminants_if_then_header():
+    # RR728 item 27: a complete one-line formula ("= Σ <hourly>") is directly
+    # followed by the NEXT sub-determinant's "(b.2.1) IF … / THEN / <det> = …".
+    # The IF/THEN are the NEXT item's header and must NOT be pulled into item 27
+    # (that produced a page-crossing crop whose second half was a lone "THEN").
+    texts = [
+        "(b.2) RtMwpBaaDistAdjDlyQty b, d = Σ RtMwpBaaDistAdjHrlyQty b, h",  # item 27 def (complete)
+        "(b.2.1) IF RtDcTieBaaSinkHrlyFlg b, h = 1",                         # item 28 header (IF)
+        "THEN",
+        "RtMwpBaaDistAdjHrlyQty b, h = RtMwpBaaDistHrlyQty b, h + RtDcTieSppHrlyQty h",  # item 28 def
+    ]
+    lines = [{"page": 0, "top": 300 - i * 20, "bottom": 300 - i * 20 - 8,
+              "text": t, "def": _def_of(t)} for i, t in enumerate(texts)]
+
+    # Item 27: just its own one-line formula — the IF/THEN below are excluded.
+    assert S._block_lines(lines, 0, "rtmwpbaadistadjdlyqty") == [0]
+    # Item 28: still gets its full conditional (IF header prepended + THEN + def).
+    assert S._block_lines(lines, 3, "rtmwpbaadistadjhrlyqty") == [1, 2, 3]
+
+
+def test_block_keeps_own_if_then_else_below_definition():
+    # Guard: when the IF/THEN/ELSE is the CURRENT determinant's own formula (its
+    # values sit between the IF and the next def), the walk must NOT stop at the
+    # IF — the next-header detector only fires for a DIFFERENT determinant.
+    texts = [
+        ("#RtFoo a, s, b, i =", "RtFoo"),                 # def, RHS below
+        ("IF RtBar5minQty a, s > 0", None),               # own conditional
+        ("THEN", None),
+        ("Max( 0, RtBaz5minQty a, s, b, i )", None),      # THEN value
+        ("ELSE", None),
+        ("RtFoo a, s, b, i = 0", "RtFoo"),                # same det ELSE value
+    ]
+    lines = [{"page": 0, "top": 300 - i * 20, "bottom": 300 - i * 20 - 8,
+              "text": t, "def": d} for i, (t, d) in enumerate(texts)]
+    kept = S._block_lines(lines, 0, "rtfoo")
+    assert kept == [0, 1, 2, 3, 4, 5]  # whole conditional kept; IF not treated as a boundary
+
+
 def test_block_jumps_footnote_between_formula_halves():
     # Formula continues on the next page AFTER a page-foot footnote; the footnote
     # (and page number) are skipped, the page-2 continuation is kept, and the

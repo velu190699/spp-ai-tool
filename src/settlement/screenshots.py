@@ -288,15 +288,44 @@ def _formula_header(lines, def_pos):
     return []
 
 
+def _starts_next_header(lines, k, det_key, page_cap):
+    """True if line ``k`` begins the IF/THEN header of a LATER, different determinant.
+
+    A sub-determinant is often written "(b.2.1) IF <cond> / THEN / <otherdet> = …"
+    directly below the previous determinant's (complete) one-line formula. That
+    labeled IF is NOT a new definition and DOES look like a formula (CamelCase),
+    so the walk-down would otherwise swallow it — and, if a page break falls
+    between the IF and THEN, emit a useless lone-"THEN" crop (RR728 item 27).
+
+    The IF/THEN is the NEXT determinant's header exactly when the same
+    ``_formula_header`` that builds that determinant's crop reaches back to line
+    ``k``. Reusing it keeps this in lockstep with the header-prepend logic and
+    never fires for an IF/THEN/ELSE that belongs to the current determinant (its
+    value lines sit between the IF and any later def, so the header walk stops
+    before reaching ``k``).
+    """
+    if not (_IF_LINE.match(lines[k]["text"]) or _THEN_LINE.match(lines[k]["text"])):
+        return False
+    for j in range(k + 1, min(len(lines), k + 1 + _HEADER_MAX_LINES)):
+        ln = lines[j]
+        if ln["page"] > page_cap or _GLOSSARY.match(ln["text"]):
+            return False
+        if ln["def"]:
+            # A def for the SAME determinant is a continuation, not a boundary.
+            return not _det_matches(ln["def"], det_key) and k in _formula_header(lines, j)
+    return False
+
+
 def _block_lines(lines, start_pos, det_key):
     """Indices of the lines that make up determinant `det_key`'s formula.
 
     Prepends an "IF … THEN" header when the formula is a conditional, then walks
     DOWN from the definition keeping formula lines (including IF/THEN/ELSE
     branches and a repeated "<det> = 0" ELSE value for the SAME determinant).
-    Stops at the glossary ("Where"), a DIFFERENT determinant's definition, or
-    the page cap; drops blank lines, page numbers, and OLE fragments; and jumps
-    over a footnote when the formula resumes after it.
+    Stops at the glossary ("Where"), a DIFFERENT determinant's definition, the
+    IF/THEN header of the NEXT determinant, or the page cap; drops blank lines,
+    page numbers, and OLE fragments; and jumps over a footnote when the formula
+    resumes after it.
     """
     page_cap = lines[start_pos]["page"] + _MAX_BLOCK_PAGES - 1
     kept = _formula_header(lines, start_pos) + [start_pos]
@@ -307,6 +336,8 @@ def _block_lines(lines, start_pos, det_key):
             break
         if ln["def"] and not _det_matches(ln["def"], det_key):
             break
+        if _starts_next_header(lines, k, det_key, page_cap):
+            break  # the next sub-determinant's "(b.2.1) IF … THEN" header starts here
         if not ln["text"].strip() or _PAGE_NUMBER.match(ln["text"].strip()):
             k += 1
             continue
