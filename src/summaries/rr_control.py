@@ -77,6 +77,9 @@ def build_rr_control_rows(
                 "status": w.get("status", "open"),
                 "domain": w.get("domain", ""),
                 "working_group": w.get("primary_working_group", ""),
+                # Link to the RR itself: the synced Recommendation Report docx if
+                # known, else the SPP RR search page. Rendered on the RR number.
+                "rr_url": w.get("rr_doc_url", "") or w.get("search_url", ""),
                 "determinants": determinants,
                 "det_count": len(determinants),
                 "changes": (changes_of(rr) if changes_of else []) or [],
@@ -169,10 +172,20 @@ _TEMPLATE = """<!DOCTYPE html>
   .tab[aria-selected="true"]{color:var(--ink); border-bottom-color:var(--accent);}
   .tab:focus-visible{outline:2px solid var(--accent); outline-offset:2px; border-radius:4px;}
   .panel{display:none;} .panel.active{display:block;}
-  .det-rr{margin-top:26px;}
-  .det-rr .rrhead{display:flex; align-items:baseline; gap:10px; border-bottom:2px solid var(--ink); padding-bottom:6px;}
-  .det-rr h3{font-size:16px; margin:0;}
-  .det-rr .meta2{font-size:12.5px; color:var(--muted); margin:6px 0 0;}
+  .det-rr{margin-top:14px; border:1px solid var(--line); border-radius:10px; overflow:hidden;}
+  .det-rr .rrhead{width:100%; display:flex; align-items:baseline; gap:10px; text-align:left;
+    appearance:none; border:0; background:var(--card); cursor:pointer; font:inherit;
+    padding:13px 15px; border-bottom:1px solid transparent;}
+  .det-rr .rrhead:hover{background:#f9fbfd;}
+  .det-rr.open .rrhead{border-bottom-color:var(--line);}
+  .det-rr .rrhead .caret{color:var(--muted); transition:transform .12s; font-size:12px;}
+  .det-rr.open .rrhead .caret{transform:rotate(90deg);}
+  .det-rr h3{font-size:15.5px; margin:0;}
+  .det-rr .rttl{color:var(--muted); font-size:13px; flex:1;}
+  .det-rr .cnt{color:var(--muted); font-size:12px; white-space:nowrap;}
+  .det-body{display:none; padding:0 15px 14px;}
+  .det-rr.open .det-body{display:block;}
+  .det-rr .meta2{font-size:12.5px; color:var(--muted); margin:12px 0 0;}
   .dtab{width:100%; border-collapse:collapse; margin-top:10px; background:var(--card); border:1px solid var(--line); border-radius:8px; overflow:hidden;}
   .dtab th{text-align:left; font-size:10.5px; letter-spacing:.04em; text-transform:uppercase; color:var(--muted); font-weight:700; padding:8px 10px; background:#fbfcfd; border-bottom:1px solid var(--line-strong);}
   .dtab td{padding:8px 10px; border-top:1px solid var(--line); font-size:13px; vertical-align:top;}
@@ -266,7 +279,7 @@ _TEMPLATE = """<!DOCTYPE html>
     <tbody>
       {% for r in rows %}
       <tr class="rr-row{{ ' oos' if r.out_of_scope }}" data-rr="{{ r.rr_number }}">
-        <td class="rrid">RR{{ r.rr_number }}{% if r.domain %}<span class="dom">{{ r.domain }}</span>{% endif %}</td>
+        <td class="rrid">{% if r.rr_url %}<a href="{{ r.rr_url }}" onclick="event.stopPropagation();">RR{{ r.rr_number }}</a>{% else %}RR{{ r.rr_number }}{% endif %}{% if r.domain %}<span class="dom">{{ r.domain }}</span>{% endif %}</td>
         <td class="ttl"><span class="caret">&#9656;</span> {{ r.title }}{% if r.working_group %}<span class="wg">{{ r.working_group }}</span>{% endif %}</td>
         <td>
           <span class="cls cls-{{ r.class_code }}" title="{{ r.class_blurb }}">{{ r.class_label }}</span>
@@ -316,11 +329,17 @@ _TEMPLATE = """<!DOCTYPE html>
 
   <div class="panel" id="panel-dets" role="tabpanel" aria-labelledby="tab-dets">
     <p class="hint">The charge-code changes each <b>Settlement calc</b> RR makes, with the Recommendation-Report page for each — the same per-item detail as the settlement Excel. (Tariff / no-MP RRs change no formulas, so they don't appear here.)</p>
-    {% for r in rows if r.rr_class == 'SETTLEMENT_CALC' %}
-    <div class="det-rr">
-      <div class="rrhead"><h3>RR{{ r.rr_number }}</h3><span style="color:var(--muted); font-size:13px;">{{ r.title }}</span></div>
-      <p class="meta2">{{ r.det_count }} determinant{{ 's' if r.det_count != 1 }}
-        {%- if r.market_initiative %} &middot; {{ r.market_initiative }}{% endif %}
+    {% for r in rows if r.rr_class == 'SETTLEMENT_CALC' and not r.out_of_scope %}
+    <div class="det-rr" data-det="{{ r.rr_number }}">
+      <button class="rrhead" aria-expanded="false" aria-controls="detbody-{{ r.rr_number }}">
+        <span class="caret">&#9656;</span>
+        <h3>RR{{ r.rr_number }}</h3>
+        <span class="rttl">{{ r.title }}</span>
+        <span class="cnt">{{ r.det_count }} determinant{{ 's' if r.det_count != 1 }}</span>
+      </button>
+      <div class="det-body" id="detbody-{{ r.rr_number }}">
+      <p class="meta2">
+        {%- if r.market_initiative %}{{ r.market_initiative }}{% else %}initiative not named{% endif %}
         {%- if r.status != 'open' %} &middot; {{ r.status }}{% endif %}</p>
       {% if r.changes %}
       <div class="det-scroll">
@@ -345,9 +364,10 @@ _TEMPLATE = """<!DOCTYPE html>
       {% else %}
       <p class="blank">No # determinant tokens detected — thin RR (e.g. CHILL); review the Recommendation Report directly.</p>
       {% endif %}
+      </div>
     </div>
     {% else %}
-    <p class="blank" style="padding:16px 0;">No Settlement-calc RRs on the watch list yet.</p>
+    <p class="blank" style="padding:16px 0;">No in-scope Settlement-calc RRs yet (RRs that affect Market Protocols / SUG appear here).</p>
     {% endfor %}
   </div>
 
@@ -385,6 +405,14 @@ _TEMPLATE = """<!DOCTYPE html>
         var isOpen = row.classList.contains('open');
         row.classList.toggle('open', !isOpen);
         if(exp){ exp.classList.toggle('open', !isOpen); }
+      });
+    });
+    var dets = Array.prototype.slice.call(document.querySelectorAll('.det-rr .rrhead'));
+    dets.forEach(function(head){
+      head.addEventListener('click', function(){
+        var box = head.parentNode;
+        var open = box.classList.toggle('open');
+        head.setAttribute('aria-expanded', open ? 'true' : 'false');
       });
     });
   })();

@@ -134,6 +134,30 @@ def test_determinants_tab_falls_back_to_codes_without_a_story():
     assert "after a settlement-report run" in html
 
 
+def test_rr_number_links_to_the_rr_doc():
+    rows = build_rr_control_rows([_watched(rr_doc_url="https://sp/rr728.docx")])
+    assert rows[0]["rr_url"] == "https://sp/rr728.docx"
+    html = render_rr_control(rows, {"title": "T", "generated": "x", "market": "SPPIM"})
+    assert 'href="https://sp/rr728.docx"' in html
+
+
+def test_determinants_tab_excludes_out_of_scope_and_is_collapsible():
+    changes = [{"determinant": "#X", "section": "2.7", "formula_before": "a", "formula_after": "b", "page": 5}]
+    rows = build_rr_control_rows(
+        [
+            _watched(rr_number="728", rr_class="SETTLEMENT_CALC", mp_impact=True, determinants=["#X"]),
+            _watched(rr_number="773", rr_class="SETTLEMENT_RELEVANT", mp_impact=False),  # out of scope
+        ],
+        changes_of=lambda rr: changes if rr == "728" else [],
+    )
+    html = render_rr_control(rows, {"title": "T", "generated": "x", "market": "SPPIM"})
+    dets_panel = html.split('id="panel-dets"', 1)[1]
+    assert 'data-det="728"' in dets_panel      # in-scope RR has a section
+    assert 'data-det="773"' not in dets_panel  # out-of-scope RR excluded
+    # Collapsible: each section has a toggle header with aria-expanded.
+    assert 'class="rrhead" aria-expanded="false"' in dets_panel
+
+
 def test_render_empty_state():
     html = render_rr_control([], {"title": "T", "generated": "July 22, 2026", "market": "SPPIM"})
     assert "No RRs are being watched yet" in html

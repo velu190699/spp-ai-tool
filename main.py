@@ -447,6 +447,8 @@ def _enrich_watch_details(state: MetadataStore, config) -> None:
             "rr_class": report.get("rr_class", "") or "",
             "determinants": report.get("determinants_found", []),
             "mp_impact": "Market Protocols" in report.get("checked_impacted_boxes", []),
+            # A clickable link to the RR's Recommendation Report (the synced docx).
+            "rr_doc_url": to_sharepoint_url(Path(path), config.sharepoint_sync_root, config.sharepoint_base_url),
         })
 
 
