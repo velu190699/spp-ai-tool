@@ -1,0 +1,20 @@
+# SME-set market initiatives for RRs the auto-extractor can't infer.
+#
+# The tool reads a market initiative from a seasonal-bundle / HITT phrase near
+# the RR mention in the CUF/SUF slides (see src/documents/rr_extractor.py). When
+# an RR's initiative is a plain named effort (e.g. a project), the extractor
+# leaves it blank and only shows it as a "nearby" hint. An SME can pin the real
+# label here; it overrides whatever the extractor found (or didn't) and is shown
+# as the RR's market initiative everywhere.
+#
+# Keep the label VERBATIM from the source slide (never invent one). Cite the
+# source file/page when known. Keyed by RR number (digits only, no "RR").
+#
+# Example:
+# "750":
+#   initiative: "RTO Expansion Project"
+#   citation: "SUF Meeting Materials 20260409_20260402.pdf:p38"
+
+"750":
+  initiative: "RTO Expansion Project"
+  citation: "SUF Meeting Materials 20260409_20260402.pdf:p38"

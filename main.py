@@ -400,6 +400,37 @@ def accumulate_watch_list_initiatives(state: MetadataStore, config, warnings: li
         )
 
 
+def apply_initiative_overrides(state: MetadataStore, config) -> None:
+    """Pin SME-set market initiatives from config/initiative_overrides.yaml.
+
+    For RRs whose initiative is a plain named effort the extractor can't infer
+    (e.g. RR750 -> "RTO Expansion Project"), an SME sets the verbatim label here.
+    It overrides the auto value on the watched RR. Runs AFTER accumulation so it
+    wins, and survives future runs (accumulation only sets a non-blank seasonal
+    label, which these RRs don't have). Missing/empty file is a no-op.
+    """
+    path = config.initiative_overrides_file
+    if not path.exists():
+        return
+    try:
+        import yaml
+        overrides = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except Exception as exc:  # a malformed override file must not sink the run
+        LOGGER.warning("Could not read initiative overrides %s: %s", path, exc)
+        return
+    for rr_number, spec in overrides.items():
+        if not isinstance(spec, dict) or not spec.get("initiative"):
+            continue
+        if state.get_watched(str(rr_number)) is None:
+            continue  # only pin initiatives for RRs actually being watched
+        state.upsert_watched(str(rr_number), {
+            "market_initiative": spec.get("initiative", ""),
+            "market_initiative_citation": spec.get("citation", ""),
+            "initiative_source": "sme_override",
+        })
+        LOGGER.info("Applied SME initiative override for RR%s: %s", rr_number, spec.get("initiative"))
+
+
 def _enrich_relevant_from_watch_list(state: MetadataStore, relevant_rrs: list[dict[str, Any]]) -> None:
     """Backfill a blank market initiative on the relevant list from the watch list.
 
@@ -559,6 +590,7 @@ def generate_rr_control() -> int:
     run_id = datetime.now().strftime("%Y%m%d-%H%M%S")
     warnings: list[str] = []
     accumulate_watch_list_initiatives(state, config, warnings)
+    apply_initiative_overrides(state, config)
     html_path, url = build_rr_control_html(state, config, run_id)
     state.save()  # persist accumulation + any rr_class discovered during classification
     for warning in warnings:
@@ -745,6 +777,7 @@ def run(dry_run: bool) -> int:
         # run), then fill any still-blank initiative on the relevant list from the
         # now-updated watch list so the briefing reflects the recovered label.
         accumulate_watch_list_initiatives(state, config, warnings)
+        apply_initiative_overrides(state, config)
         _enrich_relevant_from_watch_list(state, relevant_rrs)
     reports = [] if dry_run else process_recommendation_reports(
         relevant_rrs=download_rrs,

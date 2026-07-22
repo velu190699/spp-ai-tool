@@ -144,3 +144,30 @@ def test_enrich_relevant_from_watch_list_fills_only_blanks(tmp_path):
     assert relevant[0]["market_initiative"] == "Fall 2026 Bundle"
     assert relevant[0]["market_initiative_citation"] == "old.pdf:p6"
     assert relevant[1]["market_initiative"] == "Latest label"
+
+
+def test_apply_initiative_overrides_pins_sme_label(tmp_path, monkeypatch):
+    import main as m
+    ov = tmp_path / "ov.yaml"
+    ov.write_text('"750":\n  initiative: "RTO Expansion Project"\n  citation: "SUF.pdf:p38"\n', encoding="utf-8")
+    cfg = SimpleNamespace(initiative_overrides_file=ov)
+    store = MetadataStore(tmp_path / "m.json")
+    store.upsert_watched("750", {"market_initiative": "", "status": "open"})
+    store.upsert_watched("999", {"status": "open"})  # not in overrides
+    m.apply_initiative_overrides(store, cfg)
+    assert store.get_watched("750")["market_initiative"] == "RTO Expansion Project"
+    assert store.get_watched("750")["market_initiative_citation"] == "SUF.pdf:p38"
+    assert store.get_watched("750")["initiative_source"] == "sme_override"
+    # An override for an un-watched RR is skipped (no resurrection).
+    store2 = MetadataStore(tmp_path / "m2.json")
+    m.apply_initiative_overrides(store2, cfg)
+    assert store2.get_watched("750") is None
+
+
+def test_apply_initiative_overrides_missing_file_is_noop(tmp_path):
+    import main as m
+    cfg = SimpleNamespace(initiative_overrides_file=tmp_path / "nope.yaml")
+    store = MetadataStore(tmp_path / "m.json")
+    store.upsert_watched("750", {"status": "open"})
+    m.apply_initiative_overrides(store, cfg)  # no raise
+    assert store.get_watched("750").get("market_initiative", "") == ""

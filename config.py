@@ -33,6 +33,7 @@ class AppConfig:
     rr_master_list_dir: Path
     state_file: Path
     area_routing_file: Path
+    initiative_overrides_file: Path
     reports_dir: Path
     published_reports_dir: Path
     published_control_dir: Path
@@ -95,6 +96,9 @@ def load_config(path: str = "config.yaml") -> AppConfig:
         # SME-editable area->topic routing for the summary report (P0-1). Kept
         # in a YAML so Kashmita's corrections land without a code change.
         area_routing_file=_expand_path(paths.get("area_routing_file", "config/area_routing.yaml")),
+        # SME-editable RR -> market initiative overrides (for RRs the extractor
+        # can't infer from a seasonal-bundle slide phrase). Applied over the auto value.
+        initiative_overrides_file=_expand_path(paths.get("initiative_overrides_file", "config/initiative_overrides.yaml")),
         reports_dir=_expand_path(paths.get("reports_dir", "data/reports")),
         # HTML briefing -> Reports/Briefings; settlement summary -> Reports/Summaries/BO;
         # story workbooks -> Stories/BO. FO gets its own peers later. Working
