@@ -36,12 +36,15 @@ def build_rr_control_rows(
     *,
     class_of: Callable[[str], str] | None = None,
     story_url_of: Callable[[str], str] | None = None,
+    items_of: Callable[[str], list[dict[str, Any]]] | None = None,
 ) -> list[dict[str, Any]]:
     """One display row per watched RR, newest-updated first within each status.
 
-    ``class_of`` / ``story_url_of`` map an RR number to its class and story link;
-    either may be omitted (dashboard still renders, those cells show a fallback).
-    A row's mention history is sorted oldest -> newest so the timeline reads down.
+    ``class_of`` / ``story_url_of`` / ``items_of`` map an RR number to its class,
+    story link, and the generated story's per-item change list (determinant +
+    markup-view page, as the Excel shows); any may be omitted (dashboard still
+    renders, those cells show a fallback). A row's mention history is sorted
+    oldest -> newest so the timeline reads down.
     """
     rows: list[dict[str, Any]] = []
     for w in watched:
@@ -76,6 +79,7 @@ def build_rr_control_rows(
                 "working_group": w.get("primary_working_group", ""),
                 "determinants": determinants,
                 "det_count": len(determinants),
+                "change_items": (items_of(rr) if items_of else []) or [],
                 "mp_impact": mp_impact,
                 # Out of the settlement team's scope: classified but doesn't touch
                 # Market Protocols / SUG (e.g. RR773, Tariff-only). Shown muted.
@@ -158,6 +162,22 @@ _TEMPLATE = """<!DOCTYPE html>
     border-radius:10px; padding:13px 15px;}
   .stat .n{font-size:26px; font-weight:700; line-height:1; font-variant-numeric:tabular-nums;}
   .stat .l{font-size:12px; color:var(--muted); margin-top:5px; text-transform:uppercase; letter-spacing:.05em;}
+  .tabs{display:flex; gap:4px; margin:22px 0 0; border-bottom:2px solid var(--ink);}
+  .tab{appearance:none; border:0; background:transparent; cursor:pointer; font:inherit; font-weight:600;
+    font-size:14.5px; color:var(--muted); padding:12px 16px 10px; border-bottom:3px solid transparent; margin-bottom:-2px;}
+  .tab:hover{color:var(--ink-soft);}
+  .tab[aria-selected="true"]{color:var(--ink); border-bottom-color:var(--accent);}
+  .tab:focus-visible{outline:2px solid var(--accent); outline-offset:2px; border-radius:4px;}
+  .panel{display:none;} .panel.active{display:block;}
+  .det-rr{margin-top:26px;}
+  .det-rr .rrhead{display:flex; align-items:baseline; gap:10px; border-bottom:2px solid var(--ink); padding-bottom:6px;}
+  .det-rr h3{font-size:16px; margin:0;}
+  .det-rr .meta2{font-size:12.5px; color:var(--muted); margin:6px 0 0;}
+  .dtab{width:100%; border-collapse:collapse; margin-top:10px; background:var(--card); border:1px solid var(--line); border-radius:8px; overflow:hidden;}
+  .dtab th{text-align:left; font-size:10.5px; letter-spacing:.04em; text-transform:uppercase; color:var(--muted); font-weight:700; padding:8px 10px; background:#fbfcfd; border-bottom:1px solid var(--line-strong);}
+  .dtab td{padding:8px 10px; border-top:1px solid var(--line); font-size:13px; vertical-align:top;}
+  .dtab td.pg{white-space:nowrap; font-variant-numeric:tabular-nums; color:var(--accent); font-weight:600;}
+  .dtab td.det{white-space:nowrap;}
   table{width:100%; border-collapse:collapse; margin-top:14px; background:var(--card);
     border:1px solid var(--line); border-radius:10px; overflow:hidden;}
   thead th{text-align:left; font-size:11.5px; letter-spacing:.05em; text-transform:uppercase;
@@ -225,12 +245,18 @@ _TEMPLATE = """<!DOCTYPE html>
     <div class="stat"><div class="n">{{ stats.with_story }}</div><div class="l">With story</div></div>
   </div>
 
-  <p class="hint"><span class="caret" style="color:var(--accent);">&#9656;</span> Tap any row to see its charge-code determinants and the CUF/SUF mention history behind its initiative.</p>
+  <div class="tabs" role="tablist" aria-label="RR control views">
+    <button class="tab" role="tab" id="tab-control" aria-controls="panel-control" aria-selected="true">Control</button>
+    <button class="tab" role="tab" id="tab-dets" aria-controls="panel-dets" aria-selected="false">Determinants</button>
+  </div>
+
+  <div class="panel active" id="panel-control" role="tabpanel" aria-labelledby="tab-control">
+  <p class="hint"><span class="caret" style="color:var(--accent);">&#9656;</span> Tap any row to see the CUF/SUF mention history behind its initiative. Charge-code determinants are on the <b>Determinants</b> tab.</p>
 
   <table>
     <thead>
       <tr>
-        <th>RR</th><th>Title</th><th>Class</th><th>Status</th><th>Market initiative</th><th>Story</th><th>Updated</th>
+        <th>RR</th><th>Title</th><th>Class / scope</th><th>Status</th><th>Market initiative</th><th>Story</th><th>Updated</th>
       </tr>
     </thead>
     <tbody>
@@ -256,14 +282,6 @@ _TEMPLATE = """<!DOCTYPE html>
       </tr>
       <tr class="exp" data-exp="{{ r.rr_number }}">
         <td class="exp-inner" colspan="7">
-          {% if r.rr_class == 'SETTLEMENT_CALC' %}
-          <h4>Charge-code determinants changed ({{ r.det_count }})</h4>
-          {% if r.determinants %}
-          <div>{% for d in r.determinants %}<span class="detcode">{{ d }}</span>{% endfor %}</div>
-          {% else %}
-          <p class="blank">Classified Settlement calc but no # determinant tokens were detected — thin RR, review the Recommendation Report directly.</p>
-          {% endif %}
-          {% endif %}
           <h4>CUF/SUF mention history ({{ r.mentions|length }})</h4>
           {% if r.mentions %}
           <div class="tl">
@@ -290,6 +308,43 @@ _TEMPLATE = """<!DOCTYPE html>
       {% endfor %}
     </tbody>
   </table>
+  </div>
+
+  <div class="panel" id="panel-dets" role="tabpanel" aria-labelledby="tab-dets">
+    <p class="hint">The charge-code changes each <b>Settlement calc</b> RR makes, with the Recommendation-Report page for each — the same per-item detail as the settlement Excel. (Tariff / no-MP RRs change no formulas, so they don't appear here.)</p>
+    {% for r in rows if r.rr_class == 'SETTLEMENT_CALC' %}
+    <div class="det-rr">
+      <div class="rrhead"><h3>RR{{ r.rr_number }}</h3><span style="color:var(--muted); font-size:13px;">{{ r.title }}</span></div>
+      <p class="meta2">
+        {%- if r.change_items %}{{ r.change_items|length }} change item{{ 's' if r.change_items|length != 1 }} across {{ r.det_count }} determinant{{ 's' if r.det_count != 1 }}
+        {%- else %}{{ r.det_count }} determinant{{ 's' if r.det_count != 1 }}{% endif %}
+        {%- if r.market_initiative %} &middot; {{ r.market_initiative }}{% endif %}
+        {%- if r.status != 'open' %} &middot; {{ r.status }}{% endif %}</p>
+      {% if r.change_items %}
+      <table class="dtab">
+        <thead><tr><th style="width:34px;">#</th><th style="width:190px;">Determinant</th><th>Change</th><th style="width:64px;">Page</th></tr></thead>
+        <tbody>
+          {% for it in r.change_items %}
+          <tr>
+            <td style="color:var(--muted);">{{ it.n if it.n is not none else loop.index }}</td>
+            <td class="det"><span class="detcode">{{ it.determinant }}</span></td>
+            <td>{{ it.action }}</td>
+            <td class="pg">{% if it.page is not none %}p.{{ it.page }}{% else %}&mdash;{% endif %}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% elif r.determinants %}
+      <div>{% for d in r.determinants %}<span class="detcode">{{ d }}</span>{% endfor %}</div>
+      <p class="blank" style="margin-top:8px;">Determinant codes only — per-item pages appear here after a settlement-report run generates this RR's story.</p>
+      {% else %}
+      <p class="blank">No # determinant tokens detected — thin RR (e.g. CHILL); review the Recommendation Report directly.</p>
+      {% endif %}
+    </div>
+    {% else %}
+    <p class="blank" style="padding:16px 0;">No Settlement-calc RRs on the watch list yet.</p>
+    {% endfor %}
+  </div>
 
   <footer>
     SPP RR Control &mdash; persistent watch-list snapshot. Classes and initiatives are derived from the
@@ -299,6 +354,24 @@ _TEMPLATE = """<!DOCTYPE html>
 </div>
 <script>
   (function(){
+    var tabs = Array.prototype.slice.call(document.querySelectorAll('.tab'));
+    function selectTab(tab){
+      tabs.forEach(function(t){
+        var on = t === tab;
+        t.setAttribute('aria-selected', on ? 'true' : 'false');
+        document.getElementById(t.getAttribute('aria-controls')).classList.toggle('active', on);
+      });
+    }
+    tabs.forEach(function(t, i){
+      t.addEventListener('click', function(){ selectTab(t); });
+      t.addEventListener('keydown', function(e){
+        if(e.key==='ArrowRight'||e.key==='ArrowLeft'){
+          e.preventDefault();
+          var next = tabs[(i+(e.key==='ArrowRight'?1:-1)+tabs.length)%tabs.length];
+          next.focus(); selectTab(next);
+        }
+      });
+    });
     var rows = Array.prototype.slice.call(document.querySelectorAll('tr.rr-row'));
     rows.forEach(function(row){
       row.addEventListener('click', function(){

@@ -461,6 +461,43 @@ def _rr_story_url_resolver(state: MetadataStore, config):
     return resolve
 
 
+def _rr_story_items_resolver(config):
+    """Map an RR number to its generated story's per-item change list.
+
+    Reuses the newest persisted story JSON for the RR (no LLM, no re-render): its
+    ``jira_stories[0].items`` are the numbered change items — determinant, action,
+    and MARKUP-view page — that the Excel report sheet shows. Pages therefore stay
+    consistent with the Excel (never mixing markup/content numbering). Returns
+    ``[]`` for an RR that has no story yet; the dashboard then falls back to the
+    bare determinant codes with no page citation.
+    """
+    stories_dir = config.settlement_reports_dir / "stories"
+
+    def resolve(rr: str) -> list[dict[str, Any]]:
+        matches = sorted(stories_dir.glob(f"RR{rr}-*.json")) if stories_dir.exists() else []
+        if not matches:
+            return []
+        try:
+            data = json.loads(matches[-1].read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            LOGGER.warning("Could not read story JSON for RR%s: %s", rr, exc)
+            return []
+        stories = data.get("jira_stories") or []
+        items = stories[0].get("items", []) if stories else []
+        return [
+            {
+                "n": it.get("n"),
+                "determinant": it.get("determinant", ""),
+                "action": it.get("action", ""),
+                "page": it.get("page"),
+                "code": it.get("code", ""),
+            }
+            for it in items
+        ]
+
+    return resolve
+
+
 def build_rr_control_html(state: MetadataStore, config, run_id: str, *, state_note: str = "") -> tuple[Path, str]:
     """Render the persistent RR Control dashboard and publish it (dated, accumulating).
 
@@ -474,6 +511,7 @@ def build_rr_control_html(state: MetadataStore, config, run_id: str, *, state_no
     rows = rr_control.build_rr_control_rows(
         state.list_watched(),
         story_url_of=_rr_story_url_resolver(state, config),
+        items_of=_rr_story_items_resolver(config),
     )
     market = config.state_file.parent.parent.name  # <root>/<market>/State/metadata.json
     html = rr_control.render_rr_control(

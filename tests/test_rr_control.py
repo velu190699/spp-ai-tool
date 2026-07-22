@@ -80,6 +80,9 @@ def test_render_is_self_contained_html_with_rows():
     assert "SPPIM Settlement Changes Control" in html  # title comes from meta
     assert "RR728" in html and "Fall 2026 Bundle" in html
     assert "Settlement calc" in html
+    # Two tabs: the Control register and the Determinants breakdown.
+    assert 'id="tab-control"' in html and 'id="tab-dets"' in html
+    assert 'id="panel-dets"' in html
 
 
 def test_settlement_relevant_label_is_reworded():
@@ -101,6 +104,32 @@ def test_candidate_hint_shown_only_when_no_initiative():
         {"kind": "CUF", "meeting_date": "2026-06-18", "initiative": "Fall 2026 Bundle", "candidate": ""},
     ])])
     assert rows2[0]["initiative_hint"] == ""
+
+
+def test_determinants_tab_table_with_pages():
+    items = [
+        {"n": 1, "determinant": "#RtMwpDistHrlyAmt", "action": "Update the calc", "page": 16, "code": "RR728-01"},
+        {"n": 2, "determinant": "RtDevHrlyQty", "action": "Swap terms", "page": 17, "code": "RR728-02"},
+    ]
+    rows = build_rr_control_rows(
+        [_watched(rr_class="SETTLEMENT_CALC", determinants=["#RtMwpDistHrlyAmt", "RtDevHrlyQty"], mp_impact=True)],
+        items_of=lambda rr: items,
+    )
+    assert rows[0]["change_items"] == items
+    html = render_rr_control(rows, {"title": "T", "generated": "x", "market": "SPPIM"})
+    # Determinants tab renders a table with the markup-view page citations.
+    assert "p.16" in html and "p.17" in html
+    assert "#RtMwpDistHrlyAmt" in html and "Update the calc" in html
+    assert "2 change items across 2 determinants" in html
+
+
+def test_determinants_tab_falls_back_to_codes_without_a_story():
+    rows = build_rr_control_rows(
+        [_watched(rr_class="SETTLEMENT_CALC", determinants=["#RtCalMtr5minQty"], mp_impact=True)]
+    )  # no items_of -> no story items
+    html = render_rr_control(rows, {"title": "T", "generated": "x", "market": "SPPIM"})
+    assert "#RtCalMtr5minQty" in html
+    assert "after a settlement-report run" in html
 
 
 def test_render_empty_state():
