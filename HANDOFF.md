@@ -1,8 +1,54 @@
 # SPP AI Tool — Session Handoff
 
-_Snapshot for picking this project up in a fresh chat. Updated 2026-07-21._
+_Snapshot for picking this project up in a fresh chat. Updated 2026-07-22._
 
-## Latest session — 2026-07-21 (read this first)
+## Latest session — 2026-07-22 (read this first)
+
+**Everything committed; 136 tests passing.** Branch is ahead of origin by ~14
+commits — **not pushed yet** (push when ready). This session finished Option B
+items #4 and #5 and left **#6 as the next task, to be started in a fresh chat.**
+
+- ✅ **#4 Initiative accumulation** across CUF/SUF editions (parse each edition
+  once, backfill older synced editions, per-RR `mentions_seen` history,
+  current-initiative = newest edition that names one).
+- ✅ **#5 RR Control dashboard** (`src/summaries/rr_control.py`, `main.py
+  rr-control`): dated + accumulating HTML → synced `Reports/Control/`. Two tabs —
+  **Control** (watch-list register: RR#→docx link, class + MP-scope chip, status,
+  initiative, story link, updated; rows expand to CUF/SUF mention history) and
+  **Determinants** (collapsible per-RR tables of charge-code changes with
+  formula-before / formula-after / page, reused from the story JSON; only
+  in-scope SETTLEMENT_CALC RRs). Title "<market> Settlement Changes Control".
+- ✅ **SME initiative overrides** (`config/initiative_overrides.yaml`,
+  `apply_initiative_overrides`): RR750 pinned to "RTO Expansion Project"
+  (Eduardo's call — verbatim from the SUF slide; the extractor couldn't infer it).
+- ✅ **Coverage caveat** documented (May 2026 CUF sat in a personal OneDrive,
+  unparsed — editions must be in the synced team folder).
+
+### Decisions locked this session
+- **RR750 initiative = "RTO Expansion Project"** (done, via the override file).
+- **xlsx summary:** recommendation is to **retire the combined
+  `SPP_RR_Report_Summary.xlsx` (overview) once Miquel confirms nothing downstream
+  reads it** — the dashboard supersedes it — but **keep the per-RR Jira story
+  workbooks** (redline screenshots → Jira). Not done yet; phased, pending Miquel.
+
+### 🎯 NEXT: Option B #6 — heartbeat + per-report Slack messages (fresh chat)
+Eduardo wants **good Slack messages for each report type** (not just a link):
+- **Heartbeat:** on a no-change `run`, post a short "nothing new this week" so
+  silence is never ambiguous (today `run` posts the briefing whenever the
+  relevant list is non-empty — see RUNBOOK §6/§7).
+- **Briefing Slack = "by area":** group relevant changes per PCI area (5 areas in
+  `config/area_routing.yaml`; RRs live under Market Systems only), count badge +
+  item lines, button to the full HTML. Empty state degrades to the heartbeat.
+- **Distinct, well-crafted messages per report type:** the all-teams briefing
+  (`run`), the settlement report + story drafts (`settlement-report`), the RR
+  Control dashboard (`rr-control`, currently posts no Slack), and failures. See
+  `src/notifications/notifier.py` (`send_slack_report_link`, `send_slack_story_drafts`,
+  `send_slack_failure`, `log_slack_draft`). Slack is configured on this laptop
+  (posts to the real `s-markets-monitoring-reports` channel — mind live posts).
+
+---
+
+## Earlier session — 2026-07-21
 
 Large session; **everything committed, working tree clean, 110 tests passing.**
 `RUNBOOK.md` is the canonical design doc. Highlights:
