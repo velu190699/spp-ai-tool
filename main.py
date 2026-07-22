@@ -461,15 +461,20 @@ def _rr_story_url_resolver(state: MetadataStore, config):
     return resolve
 
 
-def _rr_story_items_resolver(config):
-    """Map an RR number to its generated story's per-item change list.
+def _norm_det(name: str) -> str:
+    """Normalize a determinant token for matching (drop '#', spacing, case)."""
+    return "".join(str(name).split()).lstrip("#").lower()
 
-    Reuses the newest persisted story JSON for the RR (no LLM, no re-render): its
-    ``jira_stories[0].items`` are the numbered change items — determinant, action,
-    and MARKUP-view page — that the Excel report sheet shows. Pages therefore stay
-    consistent with the Excel (never mixing markup/content numbering). Returns
-    ``[]`` for an RR that has no story yet; the dashboard then falls back to the
-    bare determinant codes with no page citation.
+
+def _rr_charge_changes_resolver(config):
+    """Map an RR number to its generated story's per-determinant formula changes.
+
+    Reuses the newest persisted story JSON (no LLM, no re-render). Each row is one
+    charge-code determinant with its ``formula_before`` / ``formula_after`` (from
+    ``charge_codes``) and the MARKUP-view page for that determinant (joined from
+    ``jira_stories[0].items`` by determinant name, so pages match the Excel and
+    never mix markup/content numbering). Returns ``[]`` for an RR with no story
+    yet; the dashboard then falls back to the bare determinant codes.
     """
     stories_dir = config.settlement_reports_dir / "stories"
 
@@ -484,15 +489,22 @@ def _rr_story_items_resolver(config):
             return []
         stories = data.get("jira_stories") or []
         items = stories[0].get("items", []) if stories else []
+        # determinant -> first markup-view page seen for it (items carry pages).
+        page_by_det: dict[str, Any] = {}
+        for it in items:
+            key = _norm_det(it.get("determinant", ""))
+            if key and key not in page_by_det and it.get("page") is not None:
+                page_by_det[key] = it.get("page")
         return [
             {
-                "n": it.get("n"),
-                "determinant": it.get("determinant", ""),
-                "action": it.get("action", ""),
-                "page": it.get("page"),
-                "code": it.get("code", ""),
+                "determinant": cc.get("code", ""),
+                "section": cc.get("section", ""),
+                "change_status": cc.get("change_status", ""),
+                "formula_before": cc.get("formula_before", ""),
+                "formula_after": cc.get("formula_after", ""),
+                "page": page_by_det.get(_norm_det(cc.get("code", ""))),
             }
-            for it in items
+            for cc in data.get("charge_codes", [])
         ]
 
     return resolve
@@ -511,7 +523,7 @@ def build_rr_control_html(state: MetadataStore, config, run_id: str, *, state_no
     rows = rr_control.build_rr_control_rows(
         state.list_watched(),
         story_url_of=_rr_story_url_resolver(state, config),
-        items_of=_rr_story_items_resolver(config),
+        changes_of=_rr_charge_changes_resolver(config),
     )
     market = config.state_file.parent.parent.name  # <root>/<market>/State/metadata.json
     html = rr_control.render_rr_control(

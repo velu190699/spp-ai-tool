@@ -36,15 +36,15 @@ def build_rr_control_rows(
     *,
     class_of: Callable[[str], str] | None = None,
     story_url_of: Callable[[str], str] | None = None,
-    items_of: Callable[[str], list[dict[str, Any]]] | None = None,
+    changes_of: Callable[[str], list[dict[str, Any]]] | None = None,
 ) -> list[dict[str, Any]]:
     """One display row per watched RR, newest-updated first within each status.
 
-    ``class_of`` / ``story_url_of`` / ``items_of`` map an RR number to its class,
-    story link, and the generated story's per-item change list (determinant +
-    markup-view page, as the Excel shows); any may be omitted (dashboard still
-    renders, those cells show a fallback). A row's mention history is sorted
-    oldest -> newest so the timeline reads down.
+    ``class_of`` / ``story_url_of`` / ``changes_of`` map an RR number to its
+    class, story link, and the generated story's per-determinant formula changes
+    (before/after + markup-view page, as the Excel shows); any may be omitted
+    (dashboard still renders, those cells show a fallback). A row's mention
+    history is sorted oldest -> newest so the timeline reads down.
     """
     rows: list[dict[str, Any]] = []
     for w in watched:
@@ -79,7 +79,7 @@ def build_rr_control_rows(
                 "working_group": w.get("primary_working_group", ""),
                 "determinants": determinants,
                 "det_count": len(determinants),
-                "change_items": (items_of(rr) if items_of else []) or [],
+                "changes": (changes_of(rr) if changes_of else []) or [],
                 "mp_impact": mp_impact,
                 # Out of the settlement team's scope: classified but doesn't touch
                 # Market Protocols / SUG (e.g. RR773, Tariff-only). Shown muted.
@@ -177,7 +177,11 @@ _TEMPLATE = """<!DOCTYPE html>
   .dtab th{text-align:left; font-size:10.5px; letter-spacing:.04em; text-transform:uppercase; color:var(--muted); font-weight:700; padding:8px 10px; background:#fbfcfd; border-bottom:1px solid var(--line-strong);}
   .dtab td{padding:8px 10px; border-top:1px solid var(--line); font-size:13px; vertical-align:top;}
   .dtab td.pg{white-space:nowrap; font-variant-numeric:tabular-nums; color:var(--accent); font-weight:600;}
-  .dtab td.det{white-space:nowrap;}
+  .dtab td.det{white-space:nowrap;} .dtab td.num{color:var(--muted); font-variant-numeric:tabular-nums;}
+  .dtab .sec{display:block; font-size:10.5px; color:var(--muted); margin-top:3px;}
+  .fml{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:11.5px;
+    color:var(--ink); white-space:pre-wrap; word-break:break-word; line-height:1.45;}
+  .det-scroll{overflow-x:auto;}
   table{width:100%; border-collapse:collapse; margin-top:14px; background:var(--card);
     border:1px solid var(--line); border-radius:10px; overflow:hidden;}
   thead th{text-align:left; font-size:11.5px; letter-spacing:.05em; text-transform:uppercase;
@@ -315,25 +319,26 @@ _TEMPLATE = """<!DOCTYPE html>
     {% for r in rows if r.rr_class == 'SETTLEMENT_CALC' %}
     <div class="det-rr">
       <div class="rrhead"><h3>RR{{ r.rr_number }}</h3><span style="color:var(--muted); font-size:13px;">{{ r.title }}</span></div>
-      <p class="meta2">
-        {%- if r.change_items %}{{ r.change_items|length }} change item{{ 's' if r.change_items|length != 1 }} across {{ r.det_count }} determinant{{ 's' if r.det_count != 1 }}
-        {%- else %}{{ r.det_count }} determinant{{ 's' if r.det_count != 1 }}{% endif %}
+      <p class="meta2">{{ r.det_count }} determinant{{ 's' if r.det_count != 1 }}
         {%- if r.market_initiative %} &middot; {{ r.market_initiative }}{% endif %}
         {%- if r.status != 'open' %} &middot; {{ r.status }}{% endif %}</p>
-      {% if r.change_items %}
+      {% if r.changes %}
+      <div class="det-scroll">
       <table class="dtab">
-        <thead><tr><th style="width:34px;">#</th><th style="width:190px;">Determinant</th><th>Change</th><th style="width:64px;">Page</th></tr></thead>
+        <thead><tr><th style="width:34px;">#</th><th style="width:150px;">Determinant</th><th>Formula before</th><th>Formula after</th><th style="width:52px;">Page</th></tr></thead>
         <tbody>
-          {% for it in r.change_items %}
+          {% for c in r.changes %}
           <tr>
-            <td style="color:var(--muted);">{{ it.n if it.n is not none else loop.index }}</td>
-            <td class="det"><span class="detcode">{{ it.determinant }}</span></td>
-            <td>{{ it.action }}</td>
-            <td class="pg">{% if it.page is not none %}p.{{ it.page }}{% else %}&mdash;{% endif %}</td>
+            <td class="num">{{ loop.index }}</td>
+            <td class="det"><span class="detcode">{{ c.determinant }}</span>{% if c.section %}<span class="sec">SUG {{ c.section }}</span>{% endif %}</td>
+            <td>{% if c.formula_before %}<code class="fml">{{ c.formula_before }}</code>{% else %}<span class="blank">new</span>{% endif %}</td>
+            <td>{% if c.formula_after %}<code class="fml">{{ c.formula_after }}</code>{% else %}<span class="blank">removed</span>{% endif %}</td>
+            <td class="pg">{% if c.page is not none %}p.{{ c.page }}{% else %}&mdash;{% endif %}</td>
           </tr>
           {% endfor %}
         </tbody>
       </table>
+      </div>
       {% elif r.determinants %}
       <div>{% for d in r.determinants %}<span class="detcode">{{ d }}</span>{% endfor %}</div>
       <p class="blank" style="margin-top:8px;">Determinant codes only — per-item pages appear here after a settlement-report run generates this RR's story.</p>

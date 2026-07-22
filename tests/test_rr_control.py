@@ -106,21 +106,23 @@ def test_candidate_hint_shown_only_when_no_initiative():
     assert rows2[0]["initiative_hint"] == ""
 
 
-def test_determinants_tab_table_with_pages():
-    items = [
-        {"n": 1, "determinant": "#RtMwpDistHrlyAmt", "action": "Update the calc", "page": 16, "code": "RR728-01"},
-        {"n": 2, "determinant": "RtDevHrlyQty", "action": "Swap terms", "page": 17, "code": "RR728-02"},
+def test_determinants_tab_table_with_before_after_and_pages():
+    changes = [
+        {"determinant": "#RtMwpDistHrlyAmt", "section": "2.7.10", "change_status": "MODIFIED",
+         "formula_before": "#RtMwpDistHrlyAmt = RtMwpSppDistRate * RtDevHrlyQty",
+         "formula_after": "#RtMwpDistHrlyAmt = RtMwpBaaDistRate * (RtDevHrlyQty + RtDcTieMwpDistAdjHrlyQty)",
+         "page": 16},
     ]
     rows = build_rr_control_rows(
-        [_watched(rr_class="SETTLEMENT_CALC", determinants=["#RtMwpDistHrlyAmt", "RtDevHrlyQty"], mp_impact=True)],
-        items_of=lambda rr: items,
+        [_watched(rr_class="SETTLEMENT_CALC", determinants=["#RtMwpDistHrlyAmt"], mp_impact=True)],
+        changes_of=lambda rr: changes,
     )
-    assert rows[0]["change_items"] == items
+    assert rows[0]["changes"] == changes
     html = render_rr_control(rows, {"title": "T", "generated": "x", "market": "SPPIM"})
-    # Determinants tab renders a table with the markup-view page citations.
-    assert "p.16" in html and "p.17" in html
-    assert "#RtMwpDistHrlyAmt" in html and "Update the calc" in html
-    assert "2 change items across 2 determinants" in html
+    # Before/after formula columns + markup-view page.
+    assert "Formula before" in html and "Formula after" in html
+    assert "RtMwpSppDistRate" in html and "RtMwpBaaDistRate" in html
+    assert "p.16" in html
 
 
 def test_determinants_tab_falls_back_to_codes_without_a_story():
