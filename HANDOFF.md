@@ -2,49 +2,59 @@
 
 _Snapshot for picking this project up in a fresh chat. Updated 2026-07-22._
 
-## Latest session — 2026-07-22 (read this first)
+## Latest session — 2026-07-22 (#6 done — read this first)
 
-**Everything committed; 136 tests passing.** Branch is ahead of origin by ~14
-commits — **not pushed yet** (push when ready). This session finished Option B
-items #4 and #5 and left **#6 as the next task, to be started in a fresh chat.**
+**Everything committed and PUSHED to origin/master; 139 tests passing.** This
+session finished **Option B #6 — so Option B (#1–#6) is now COMPLETE.** The
+commit is `f4af76f`.
 
-- ✅ **#4 Initiative accumulation** across CUF/SUF editions (parse each edition
-  once, backfill older synced editions, per-RR `mentions_seen` history,
-  current-initiative = newest edition that names one).
-- ✅ **#5 RR Control dashboard** (`src/summaries/rr_control.py`, `main.py
-  rr-control`): dated + accumulating HTML → synced `Reports/Control/`. Two tabs —
-  **Control** (watch-list register: RR#→docx link, class + MP-scope chip, status,
-  initiative, story link, updated; rows expand to CUF/SUF mention history) and
-  **Determinants** (collapsible per-RR tables of charge-code changes with
-  formula-before / formula-after / page, reused from the story JSON; only
-  in-scope SETTLEMENT_CALC RRs). Title "<market> Settlement Changes Control".
-- ✅ **SME initiative overrides** (`config/initiative_overrides.yaml`,
-  `apply_initiative_overrides`): RR750 pinned to "RTO Expansion Project"
-  (Eduardo's call — verbatim from the SUF slide; the extractor couldn't infer it).
-- ✅ **Coverage caveat** documented (May 2026 CUF sat in a personal OneDrive,
-  unparsed — editions must be in the synced team folder).
+- ✅ **#6 Per-report Slack + heartbeat** (`src/notifications/notifier.py`,
+  wired in `main.py`). Distinct, well-crafted message per situation:
+  - **Heartbeat** (`format/send_heartbeat`): a no-change `run` posts a short
+    "no changes this week — watching N RRs" so silence is never ambiguous.
+  - **Briefing "by area"** (`format/send_briefing_by_area`): rebuilt as one
+    COLORED CARD per PCI area (Slack *attachment* color bars) carrying that
+    area's skim-view summary — no RR lists, no item counts. Buttons ("Open full
+    report", "RR Control dashboard") live in a trailing colorless attachment so
+    they render BELOW the cards. Built from the report's `ReportData.areas`.
+  - **RR Control** (`format/send_rr_control`): `run` posts it with a "what
+    changed since last update" delta; the standalone `rr-control` posts the
+    register summary (offline — no delta).
+  - **Story drafts** (`format_story_drafts_message` reworked): leads with the
+    per-run delta, then per-RR template links. The standalone settlement-report
+    link message was RETIRED (the xlsx is being phased out).
+  - The `run` flow decides which fires: new CUF/SUF edition → briefing; any
+    RR-level change (new / re-published `updated` / open→closed) → RR Control
+    with delta; nothing → heartbeat.
+- ✅ **Delta = existing flags** (Eduardo's call): watch-list membership +
+  re-published-package `updated` flag + open→closed status, snapshotted
+  before/after `_refresh_watch_list`. No new historical snapshot store.
+- ✅ **Area renamed "Market Systems" → "RTO Markets"** (Eduardo, with FO/BO
+  split) across `report_model.py` (key `market_systems`→`rto_markets`),
+  `report_builder.py` (prompt + hints), `html_renderer.py`, `report_engine.py`
+  stub, `config/area_routing.yaml`, and tests. New `AREA_COLORS` in
+  `report_model.py` is the single source of area accent colors, shared by the
+  HTML report (CSS `--c-*`) and the Slack briefing cards.
 
 ### Decisions locked this session
-- **RR750 initiative = "RTO Expansion Project"** (done, via the override file).
-- **xlsx summary:** recommendation is to **retire the combined
-  `SPP_RR_Report_Summary.xlsx` (overview) once Miquel confirms nothing downstream
-  reads it** — the dashboard supersedes it — but **keep the per-RR Jira story
-  workbooks** (redline screenshots → Jira). Not done yet; phased, pending Miquel.
+- **Area taxonomy = "RTO Markets" (FO/BO split) + per-area colors**; routing
+  topics updated in `area_routing.yaml` (FO = bilateral settlements/services/ISO
+  Communication tasks; ETRM bilateral = data only). Still SME-provisional.
+- **Settlement-report Slack link message retired** — per-RR story templates are
+  the deliverable; the combined xlsx is being phased out (pending Miquel).
+- **RR Control delta only in `run`** (where changes happen); the manual
+  `rr-control` command posts the register summary without a delta.
+- Verified: production payloads rendered to HTML + a live `rr-control` post to
+  the real `s-markets-monitoring-reports` channel.
 
-### 🎯 NEXT: Option B #6 — heartbeat + per-report Slack messages (fresh chat)
-Eduardo wants **good Slack messages for each report type** (not just a link):
-- **Heartbeat:** on a no-change `run`, post a short "nothing new this week" so
-  silence is never ambiguous (today `run` posts the briefing whenever the
-  relevant list is non-empty — see RUNBOOK §6/§7).
-- **Briefing Slack = "by area":** group relevant changes per PCI area (5 areas in
-  `config/area_routing.yaml`; RRs live under Market Systems only), count badge +
-  item lines, button to the full HTML. Empty state degrades to the heartbeat.
-- **Distinct, well-crafted messages per report type:** the all-teams briefing
-  (`run`), the settlement report + story drafts (`settlement-report`), the RR
-  Control dashboard (`rr-control`, currently posts no Slack), and failures. See
-  `src/notifications/notifier.py` (`send_slack_report_link`, `send_slack_story_drafts`,
-  `send_slack_failure`, `log_slack_draft`). Slack is configured on this laptop
-  (posts to the real `s-markets-monitoring-reports` channel — mind live posts).
+### Carried forward (still open)
+- **xlsx summary retire** — recommendation stands: retire the combined
+  `SPP_RR_Report_Summary.xlsx` overview once Miquel confirms nothing downstream
+  reads it; keep the per-RR Jira story workbooks. Phased, pending Miquel.
+- **RR750 initiative = "RTO Expansion Project"** (done via the override file).
+- **Coverage caveat** — the tool parses ONLY CUF/SUF editions in the synced team
+  folder; a May 2026 CUF once sat unparsed in a personal OneDrive. Every edition
+  must land in the synced folder.
 
 ---
 
@@ -91,7 +101,9 @@ Large session; **everything committed, working tree clean, 110 tests passing.**
      Title "<market> Settlement Changes Control"; classes = Settlement calc /
      Settlement review / Tariff-governance; candidate-initiative hint when none named.
      Published a real dated snapshot to the synced folder + reviewed visually.
-   - **(6) heartbeat** + **Slack by-area** briefing (RRs under Market Systems). NOT built.
+   - ✅ **(6) heartbeat** + **Slack by-area** briefing — DONE 2026-07-22 (`f4af76f`).
+     Colored per-area cards, per-report deltas, area renamed to RTO Markets. See
+     the top session block. **Option B (#1–#6) is complete.**
    - ⚠️ **Coverage caveat (found 2026-07-22):** the tool parses ONLY the CUF/SUF
      editions in the synced team folder (`Published Documents/{CUF,SUF}`). A
      SharePoint cross-check found a **May 2026 CUF** in a *personal* OneDrive
