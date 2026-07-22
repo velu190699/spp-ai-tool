@@ -158,6 +158,32 @@ def initiative_from_contexts(
     return label, "; ".join(citations[:2])
 
 
+# A named effort/program near an RR mention that ISN'T one of the recognized
+# seasonal-initiative forms — e.g. "RTO Expansion Project", "Consolidated Planning
+# Process". Purely a HINT for the human reviewer: a capitalized phrase (2-5 words)
+# ending in an effort noun. NEVER promoted to the official market_initiative (the
+# locked rule is verbatim-from-slide, never invent) — surfaced only so a blank
+# initiative shows what was in the neighborhood.
+_CANDIDATE_PATTERN = re.compile(
+    r"\b([A-Z][A-Za-z0-9&/-]*(?:\s+[A-Z][A-Za-z0-9&/-]*){0,4}"
+    r"\s+(?:Project|Initiative|Effort|Program|Release|Bundle|Enhancement))\b"
+)
+
+
+def candidate_initiative(contexts: list[object] | None) -> str:
+    """A nearby named effort to hint at when no recognized initiative was found.
+
+    Returns the first capitalized "... Project/Initiative/Effort/..." phrase seen
+    in the mention contexts, or "" if none. This is advisory only — it is shown to
+    the reviewer as a hint, never stored as the RR's market initiative.
+    """
+    for text in contexts or []:
+        match = _CANDIDATE_PATTERN.search(str(text))
+        if match:
+            return match.group(1).strip()
+    return ""
+
+
 def merge_mentions(mentions: list[RRMention]) -> dict[str, dict[str, object]]:
     merged: dict[str, dict[str, object]] = {}
     for mention in mentions:

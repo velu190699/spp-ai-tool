@@ -35,6 +35,7 @@ class AppConfig:
     area_routing_file: Path
     reports_dir: Path
     published_reports_dir: Path
+    published_control_dir: Path
     settlement_reports_dir: Path
     published_settlement_reports_dir: Path
     jira_template_file: Path
@@ -100,6 +101,8 @@ def load_config(path: str = "config.yaml") -> AppConfig:
         # artifacts (stories JSON, images, rendered PDFs) STAY under the local
         # settlement_reports_dir — only finished outputs are published.
         published_reports_dir=reports_root / "Briefings",
+        # RR Control dashboard (persistent watch-list snapshot, dated + accumulating).
+        published_control_dir=reports_root / "Control",
         settlement_reports_dir=_expand_path(paths.get("settlement_reports_dir", "data/reports/settlement")),
         published_settlement_reports_dir=reports_root / "Summaries" / "BO",
         jira_template_file=_expand_path(paths.get("jira_template_file", "templates/Jira_Story_Creator_template.xlsx")),
@@ -138,6 +141,7 @@ def ensure_runtime_dirs(config: AppConfig) -> None:
         config.state_file.parent,
         config.reports_dir,
         config.published_reports_dir,
+        config.published_control_dir,
         config.settlement_reports_dir,
         config.published_settlement_reports_dir,
         config.jira_stories_dir,

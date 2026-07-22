@@ -1,4 +1,12 @@
-from src.documents.rr_extractor import extract_rr_mentions, normalize_rr_number
+from src.documents.rr_extractor import candidate_initiative, extract_rr_mentions, normalize_rr_number
+
+
+def test_candidate_initiative_finds_nearby_named_effort():
+    # RR750's real SUF context: no seasonal bundle, but a named project nearby.
+    ctx = ["...implemented with RTO Expansion Project effective on 4/1/2026. Calculation changes..."]
+    assert candidate_initiative(ctx) == "RTO Expansion Project"
+    assert candidate_initiative(["nothing capitalized or named here"]) == ""
+    assert candidate_initiative([]) == ""
 
 
 def test_normalize_rr_number_variants():

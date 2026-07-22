@@ -29,7 +29,7 @@ from src.documents.local_source import (
     to_sharepoint_url,
 )
 from src.documents.pdf_parser import parse_pdf
-from src.documents.rr_extractor import initiative_from_contexts, merge_mentions
+from src.documents.rr_extractor import candidate_initiative, initiative_from_contexts, merge_mentions
 from src.documents.zip_utils import extract_first_recommendation_report, extract_pdfs
 from src.notifications.notifier import (
     log_slack_draft,
@@ -37,9 +37,10 @@ from src.notifications.notifier import (
     send_slack_report_link,
     send_slack_story_drafts,
 )
-from src.settlement import jira_template_writer, screenshots
+from src.settlement import jira_template_writer, rr_structure, screenshots
 from src.settlement import pipeline as settlement_pipeline
 from src.state.metadata_store import MetadataStore
+from src.summaries import rr_control
 from src.summaries.html_renderer import render_report
 from src.summaries.report_builder import DocumentText, build_report
 from src.summaries.report_engine import build_engine
@@ -372,6 +373,9 @@ def accumulate_watch_list_initiatives(state: MetadataStore, config, warnings: li
             label, citation = initiative_from_contexts(
                 data.get("contexts", []), data.get("context_sources", [])
             )
+            # A nearby named effort to show when no seasonal initiative matched —
+            # a HINT only, never promoted to the official initiative.
+            candidate = "" if label else candidate_initiative(data.get("contexts", []))
             state.add_watched_mention(
                 rr_number,
                 {
@@ -381,6 +385,7 @@ def accumulate_watch_list_initiatives(state: MetadataStore, config, warnings: li
                     "meeting_date": meeting_date,
                     "initiative": label,
                     "initiative_citation": citation,
+                    "candidate": candidate,
                     "source": "; ".join(data.get("sources", [])[:2]),
                 },
             )
@@ -410,6 +415,105 @@ def _enrich_relevant_from_watch_list(state: MetadataStore, relevant_rrs: list[di
         if watched and watched.get("market_initiative"):
             rr["market_initiative"] = watched["market_initiative"]
             rr["market_initiative_citation"] = watched.get("market_initiative_citation", "")
+
+
+def _rr_class_resolver(state: MetadataStore, config):
+    """Map an RR number to its settlement class, parsing the docx once and caching.
+
+    Classification is deterministic (no LLM): ``rr_structure.extract`` reads the
+    newest Recommendation Report docx for the RR. The result is memoized for this
+    build AND persisted onto the watch list (``rr_class``) so a later dashboard —
+    or a run where the docx isn't on disk — reuses it without re-parsing.
+    """
+    docx_by_rr: dict[str, str] = {}
+    for path in _latest_rr_docx_files(config.recommendation_reports_dir):
+        num = _rr_number_of_path(path)
+        if num:
+            docx_by_rr[num] = path
+    cache: dict[str, str] = {}
+
+    def resolve(rr: str) -> str:
+        if rr in cache:
+            return cache[rr]
+        path = docx_by_rr.get(rr)
+        cls = ""
+        if path:
+            try:
+                report, _marked, _hard_fail = rr_structure.extract(path, rr_structure.DEFAULT_BANNERS)
+                cls = report.get("rr_class", "") or ""
+            except Exception as exc:  # a malformed docx must not sink the dashboard
+                LOGGER.warning("Could not classify RR%s from %s: %s", rr, path, exc)
+        cache[rr] = cls
+        if cls:
+            state.upsert_watched(rr, {"rr_class": cls})
+        return cls
+
+    return resolve
+
+
+def _rr_story_url_resolver(state: MetadataStore, config):
+    """Map an RR number to the SharePoint link of the settlement report that covered it."""
+    def resolve(rr: str) -> str:
+        entry = state.get_analysis("settlement_report", f"RR{rr}")
+        report_path = (entry or {}).get("outputs", {}).get("report", "")
+        if not report_path:
+            return ""
+        return to_sharepoint_url(Path(report_path), config.sharepoint_sync_root, config.sharepoint_base_url)
+    return resolve
+
+
+def build_rr_control_html(state: MetadataStore, config, run_id: str, *, state_note: str = "") -> tuple[Path, str]:
+    """Render the persistent RR Control dashboard and publish it (dated, accumulating).
+
+    Reads the whole watch list (open + closed), enriches each RR with its class
+    (from the docx) and story link (from the settlement ledger), writes a dated
+    HTML snapshot to the synced ``Reports/Control`` folder, and returns
+    ``(html_path, sharepoint_url)``. Classification may persist ``rr_class`` onto
+    the watch list, so the caller should ``state.save()`` afterwards.
+    """
+    rows = rr_control.build_rr_control_rows(
+        state.list_watched(),
+        class_of=_rr_class_resolver(state, config),
+        story_url_of=_rr_story_url_resolver(state, config),
+    )
+    market = config.state_file.parent.parent.name  # <root>/<market>/State/metadata.json
+    html = rr_control.render_rr_control(
+        rows,
+        {
+            "title": f"{market} Settlement Changes Control",
+            "generated": datetime.now().strftime("%B %d, %Y %H:%M"),
+            "market": market,
+            "state_note": state_note,
+        },
+    )
+    html_path = config.published_control_dir / f"RR_Control-{run_id}.html"
+    html_path.parent.mkdir(parents=True, exist_ok=True)
+    html_path.write_text(html, encoding="utf-8")
+    LOGGER.info("RR Control dashboard written: %s (%d RRs)", html_path, len(rows))
+    return html_path, to_sharepoint_url(html_path, config.sharepoint_sync_root, config.sharepoint_base_url)
+
+
+def generate_rr_control() -> int:
+    """Build the RR Control dashboard from the CURRENT state (no network, no LLM).
+
+    Runs accumulation first so the dashboard reflects the full CUF/SUF mention
+    history — cheap and offline (it only parses editions already synced locally),
+    and idempotent (editions already parsed are skipped). This is what makes the
+    standalone command useful without a full ``run``.
+    """
+    config = load_config()
+    ensure_runtime_dirs(config)
+    setup_logging(config.logs_dir, config.logging_level)
+    state = MetadataStore(config.state_file, legacy_path=Path("data/state/metadata.json"))
+    run_id = datetime.now().strftime("%Y%m%d-%H%M%S")
+    warnings: list[str] = []
+    accumulate_watch_list_initiatives(state, config, warnings)
+    html_path, url = build_rr_control_html(state, config, run_id)
+    state.save()  # persist accumulation + any rr_class discovered during classification
+    for warning in warnings:
+        LOGGER.warning(warning)
+    LOGGER.info("RR Control dashboard: %s", url or html_path)
+    return 0
 
 
 def run(dry_run: bool) -> int:
@@ -636,6 +740,13 @@ def run(dry_run: bool) -> int:
             # Carry the cross-reference in the shared store so `report` (and
             # runs on other machines) reuse it without walking local files.
             state.save_relevant_rrs(relevant_rrs)
+        # Refresh the persistent RR Control dashboard from the updated watch list
+        # (dated + accumulating). A render failure must not sink the run.
+        try:
+            build_rr_control_html(state, config, run_id)
+        except Exception as exc:
+            LOGGER.exception("RR Control dashboard build failed")
+            warnings.append(f"RR Control dashboard failed: {exc}")
         state.append_run({"run_id": run_id, "report_path": str(report_path), "relevant_count": len(relevant_rrs)})
         state.save()
     else:
@@ -1028,6 +1139,7 @@ def parse_args() -> argparse.Namespace:
     run_parser = subparsers.add_parser("run", help="Run the automation")
     run_parser.add_argument("--dry-run", action="store_true", help="Discover documents without downloading or storing files")
     subparsers.add_parser("report", help="Generate the SPP Market Changes Summary HTML from the latest local CUF/SUF")
+    subparsers.add_parser("rr-control", help="Build the RR Control dashboard (persistent watch-list snapshot) from the current state")
 
     settlement_parser = subparsers.add_parser(
         "settlement-report", help="Generate the SPP RR -> Jira Settlement Excel report"
@@ -1078,6 +1190,8 @@ def main() -> int:
             return run(dry_run=args.dry_run)
         if args.command == "report":
             return generate_report()
+        if args.command == "rr-control":
+            return generate_rr_control()
         if args.command == "settlement-report":
             return generate_settlement_report(
                 files=args.files, links=args.links, out=args.out, call_claude=args.call_claude,

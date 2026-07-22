@@ -117,6 +117,10 @@ class MetadataStore:
             return "new"
         return "unchanged" if existing.get("input_hash") == input_hash else "updated"
 
+    def get_analysis(self, kind: str, key: str) -> dict[str, Any] | None:
+        """The recorded analysis entry for ``kind|key`` (or None), incl. outputs."""
+        return self.data.get("analyses", {}).get(f"{kind}|{key}")
+
     def record_analysis(self, kind: str, key: str, input_hash: str, outputs: dict[str, Any] | None = None) -> None:
         now = datetime.now(timezone.utc).isoformat()
         entry_key = f"{kind}|{key}"
