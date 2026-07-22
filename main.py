@@ -417,38 +417,37 @@ def _enrich_relevant_from_watch_list(state: MetadataStore, relevant_rrs: list[di
             rr["market_initiative_citation"] = watched.get("market_initiative_citation", "")
 
 
-def _rr_class_resolver(state: MetadataStore, config):
-    """Map an RR number to its settlement class, parsing the docx once and caching.
+def _enrich_watch_details(state: MetadataStore, config) -> None:
+    """Persist each watched RR's class, determinants, and MP-impact onto the store.
 
-    Classification is deterministic (no LLM): ``rr_structure.extract`` reads the
-    newest Recommendation Report docx for the RR. The result is memoized for this
-    build AND persisted onto the watch list (``rr_class``) so a later dashboard —
-    or a run where the docx isn't on disk — reuses it without re-parsing.
+    All deterministic (no LLM): ``rr_structure.extract`` reads the newest
+    Recommendation Report docx for the RR. Captures three facts the dashboard
+    shows: ``rr_class``; ``determinants`` (the # charge-code tokens the RR
+    changes — the "what does it touch" list); and ``mp_impact`` (whether the RR
+    checks the Market Protocols / Settlement User Guide box — the settlement
+    team's scope gate, so an RR that touches only Tariff reads as out of scope).
+    Parsed once per RR here; a malformed docx is logged and skipped, never fatal.
     """
     docx_by_rr: dict[str, str] = {}
     for path in _latest_rr_docx_files(config.recommendation_reports_dir):
         num = _rr_number_of_path(path)
         if num:
             docx_by_rr[num] = path
-    cache: dict[str, str] = {}
-
-    def resolve(rr: str) -> str:
-        if rr in cache:
-            return cache[rr]
+    for watched in state.list_watched():
+        rr = watched["rr_number"]
         path = docx_by_rr.get(rr)
-        cls = ""
-        if path:
-            try:
-                report, _marked, _hard_fail = rr_structure.extract(path, rr_structure.DEFAULT_BANNERS)
-                cls = report.get("rr_class", "") or ""
-            except Exception as exc:  # a malformed docx must not sink the dashboard
-                LOGGER.warning("Could not classify RR%s from %s: %s", rr, path, exc)
-        cache[rr] = cls
-        if cls:
-            state.upsert_watched(rr, {"rr_class": cls})
-        return cls
-
-    return resolve
+        if not path:
+            continue
+        try:
+            report, _marked, _hard_fail = rr_structure.extract(path, rr_structure.DEFAULT_BANNERS)
+        except Exception as exc:  # a malformed docx must not sink the dashboard
+            LOGGER.warning("Could not classify RR%s from %s: %s", rr, path, exc)
+            continue
+        state.upsert_watched(rr, {
+            "rr_class": report.get("rr_class", "") or "",
+            "determinants": report.get("determinants_found", []),
+            "mp_impact": "Market Protocols" in report.get("checked_impacted_boxes", []),
+        })
 
 
 def _rr_story_url_resolver(state: MetadataStore, config):
@@ -471,9 +470,9 @@ def build_rr_control_html(state: MetadataStore, config, run_id: str, *, state_no
     ``(html_path, sharepoint_url)``. Classification may persist ``rr_class`` onto
     the watch list, so the caller should ``state.save()`` afterwards.
     """
+    _enrich_watch_details(state, config)  # persist class / determinants / mp_impact
     rows = rr_control.build_rr_control_rows(
         state.list_watched(),
-        class_of=_rr_class_resolver(state, config),
         story_url_of=_rr_story_url_resolver(state, config),
     )
     market = config.state_file.parent.parent.name  # <root>/<market>/State/metadata.json

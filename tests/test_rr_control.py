@@ -10,6 +10,7 @@ def _watched(**kw):
 
 def test_rows_carry_class_initiative_status_and_history():
     watched = [_watched(
+        rr_class="SETTLEMENT_CALC", determinants=["#RtA", "#RtB"], mp_impact=True,
         market_initiative="2026 Settlements Fall Bundle",
         market_initiative_citation="CUF July.pdf:p6",
         primary_working_group="MWG", domain="BO",
@@ -18,15 +19,30 @@ def test_rows_carry_class_initiative_status_and_history():
             {"kind": "CUF", "label": "June", "meeting_date": "2026-06-18", "initiative": "2026 Settlements Fall Bundle"},
         ],
     )]
-    rows = build_rr_control_rows(watched, class_of=lambda rr: "SETTLEMENT_CALC")
+    rows = build_rr_control_rows(watched)
     assert len(rows) == 1
     r = rows[0]
     assert r["rr_class"] == "SETTLEMENT_CALC"
     assert r["class_label"] == "Settlement calc" and r["class_code"] == "sc"
+    assert r["det_count"] == 2 and r["determinants"] == ["#RtA", "#RtB"]
+    assert r["out_of_scope"] is False
     assert r["market_initiative"] == "2026 Settlements Fall Bundle"
     assert r["last_updated"] == "2026-07-22"
     # History is sorted oldest -> newest so the timeline reads down the page.
     assert [m["date"] for m in r["mentions"]] == ["2026-06-18", "2026-07-16"]
+
+
+def test_out_of_scope_flag_for_non_mp_rr():
+    # RR773: classified but doesn't touch Market Protocols -> out of settlement scope.
+    rows = build_rr_control_rows([_watched(rr_class="SETTLEMENT_RELEVANT", mp_impact=False)])
+    assert rows[0]["out_of_scope"] is True
+    # A not-yet-classified RR (mp_impact None) is NOT flagged out of scope.
+    rows2 = build_rr_control_rows([_watched(rr_class="", mp_impact=None)])
+    assert rows2[0]["out_of_scope"] is False
+    # Determinants render as code chips in the expanded row.
+    rows3 = build_rr_control_rows([_watched(rr_class="SETTLEMENT_CALC", determinants=["#RtCalMtr5minQty"], mp_impact=True)])
+    html = render_rr_control(rows3, {"title": "T", "generated": "x", "market": "SPPIM"})
+    assert "#RtCalMtr5minQty" in html and "charge code" in html
 
 
 def test_class_falls_back_to_stored_then_unclassified():

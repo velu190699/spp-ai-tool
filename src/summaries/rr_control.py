@@ -47,6 +47,8 @@ def build_rr_control_rows(
     for w in watched:
         rr = str(w.get("rr_number", ""))
         rr_class = (class_of(rr) if class_of else "") or w.get("rr_class", "") or ""
+        determinants = w.get("determinants", []) or []
+        mp_impact = w.get("mp_impact")  # True / False / None (not yet classified)
         history = sorted(
             w.get("mentions_seen", []),
             key=lambda m: (m.get("meeting_date") or "", m.get("edition") or ""),
@@ -72,6 +74,12 @@ def build_rr_control_rows(
                 "status": w.get("status", "open"),
                 "domain": w.get("domain", ""),
                 "working_group": w.get("primary_working_group", ""),
+                "determinants": determinants,
+                "det_count": len(determinants),
+                "mp_impact": mp_impact,
+                # Out of the settlement team's scope: classified but doesn't touch
+                # Market Protocols / SUG (e.g. RR773, Tariff-only). Shown muted.
+                "out_of_scope": mp_impact is False and rr_class != "",
                 "market_initiative": initiative,
                 "market_initiative_citation": w.get("market_initiative_citation", ""),
                 "initiative_hint": hint,
@@ -129,7 +137,7 @@ _TEMPLATE = """<!DOCTYPE html>
     --line:#e2e6ec; --line-strong:#c6ccd6; --muted:#6b7585; --accent:#1f4e8c;
     --open:#1f7a4d; --open-bg:#e8f5ee; --closed:#6b7585; --closed-bg:#eef1f5;
     --sc:#1f4e8c; --sr:#b4630a; --tg:#6b7585; --un:#9a2b2b;
-    --init-bg:#f2f6fc;
+    --flag:#9a2b2b; --flag-bg:#fbecec; --init-bg:#f2f6fc;
   }
   *{box-sizing:border-box;}
   body{margin:0; background:var(--paper); color:var(--ink);
@@ -166,8 +174,16 @@ _TEMPLATE = """<!DOCTYPE html>
   .cls{display:inline-block; font-size:11px; font-weight:700; padding:2px 8px; border-radius:4px; white-space:nowrap;}
   .cls-sc{background:#e7eefa; color:var(--sc);} .cls-sr{background:#fbf0e2; color:var(--sr);}
   .cls-tg{background:#eef1f5; color:var(--tg);} .cls-un{background:#fbecec; color:var(--un);}
+  .dets{display:block; font-size:11px; color:var(--muted); margin-top:3px;}
+  .scope{display:inline-block; font-size:10px; font-weight:700; padding:1px 6px; border-radius:4px;
+    background:var(--flag-bg); color:var(--flag); margin-top:4px;}
+  tr.rr-row.oos td{background:#fcfcfd;} tr.rr-row.oos .ttl, tr.rr-row.oos .rrid{opacity:.62;}
+  .detcode{display:inline-block; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    font-size:11.5px; background:#eef2f7; color:var(--accent); border:1px solid var(--line);
+    border-radius:4px; padding:1px 6px; margin:0 5px 5px 0; white-space:nowrap;}
   .init{color:var(--ink);} .init .cite{display:block; font-size:11px; color:var(--muted); margin-top:2px;}
   .blank{color:var(--muted); font-style:italic;}
+  .hint{font-size:12.5px; color:var(--muted); margin:16px 0 0; display:flex; align-items:center; gap:6px;}
   .exp{border-top:0 !important;}
   .exp-inner{display:none; padding:2px 12px 16px;}
   tr.open .exp-inner{display:block;}
@@ -209,6 +225,8 @@ _TEMPLATE = """<!DOCTYPE html>
     <div class="stat"><div class="n">{{ stats.with_story }}</div><div class="l">With story</div></div>
   </div>
 
+  <p class="hint"><span class="caret" style="color:var(--accent);">&#9656;</span> Tap any row to see its charge-code determinants and the CUF/SUF mention history behind its initiative.</p>
+
   <table>
     <thead>
       <tr>
@@ -217,10 +235,14 @@ _TEMPLATE = """<!DOCTYPE html>
     </thead>
     <tbody>
       {% for r in rows %}
-      <tr class="rr-row" data-rr="{{ r.rr_number }}">
+      <tr class="rr-row{{ ' oos' if r.out_of_scope }}" data-rr="{{ r.rr_number }}">
         <td class="rrid">RR{{ r.rr_number }}{% if r.domain %}<span class="dom">{{ r.domain }}</span>{% endif %}</td>
         <td class="ttl"><span class="caret">&#9656;</span> {{ r.title }}{% if r.working_group %}<span class="wg">{{ r.working_group }}</span>{% endif %}</td>
-        <td><span class="cls cls-{{ r.class_code }}" title="{{ r.class_blurb }}">{{ r.class_label }}</span></td>
+        <td>
+          <span class="cls cls-{{ r.class_code }}" title="{{ r.class_blurb }}">{{ r.class_label }}</span>
+          {% if r.out_of_scope %}<span class="scope" title="Does not check Market Protocols / Settlement User Guide — outside the settlement team's scope.">no MP impact</span>{% endif %}
+          {% if r.det_count %}<span class="dets">{{ r.det_count }} charge code{{ 's' if r.det_count != 1 }}</span>{% endif %}
+        </td>
         <td><span class="pill st-{{ 'open' if r.status == 'open' else 'closed' }}">{{ r.status }}</span></td>
         <td class="init">
           {% if r.market_initiative %}{{ r.market_initiative }}
@@ -234,6 +256,14 @@ _TEMPLATE = """<!DOCTYPE html>
       </tr>
       <tr class="exp" data-exp="{{ r.rr_number }}">
         <td class="exp-inner" colspan="7">
+          {% if r.rr_class == 'SETTLEMENT_CALC' %}
+          <h4>Charge-code determinants changed ({{ r.det_count }})</h4>
+          {% if r.determinants %}
+          <div>{% for d in r.determinants %}<span class="detcode">{{ d }}</span>{% endfor %}</div>
+          {% else %}
+          <p class="blank">Classified Settlement calc but no # determinant tokens were detected — thin RR, review the Recommendation Report directly.</p>
+          {% endif %}
+          {% endif %}
           <h4>CUF/SUF mention history ({{ r.mentions|length }})</h4>
           {% if r.mentions %}
           <div class="tl">
