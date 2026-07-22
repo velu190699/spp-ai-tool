@@ -38,8 +38,13 @@ Large session; **everything committed, working tree clean, 110 tests passing.**
      no seasonal initiative in ANY synced edition (one mention, SUF April, "RTO
      Expansion Project"), not one hidden in an older edition.** Open Q for
      Elizabeth/Kashmita: should "RTO Expansion Project" count? See RUNBOOK §5.
-   - **(5) RR Control dashboard** — HTML in `Reports/`, dated & accumulating like
-     the briefing; renders the `mentions_seen` history. NOT built.
+   - ✅ **(5) RR Control dashboard** — DONE 2026-07-22. `src/summaries/rr_control.py`
+     + `main.py rr-control` (standalone, accumulates then builds, offline) + a hook
+     in `run`. Dated + accumulating HTML → synced `Reports/Control/`. One row per
+     watched RR (class/status/initiative/story/updated), expandable mention timeline.
+     Title "<market> Settlement Changes Control"; classes = Settlement calc /
+     Settlement review / Tariff-governance; candidate-initiative hint when none named.
+     Published a real dated snapshot to the synced folder + reviewed visually.
    - **(6) heartbeat** + **Slack by-area** briefing (RRs under Market Systems). NOT built.
 2. A real end-to-end run to exercise the full flow (first run re-downloads sources once).
 3. Confirm with Miquel his sync app reads workbooks from `Stories/BO/`.

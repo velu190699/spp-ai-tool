@@ -176,18 +176,24 @@ name like "RTO Expansion Project" count as RR750's initiative? Not hardcoded —
 the locked rule is verbatim-from-slide, never invent. NOTE: SPP synced the July
 CUF under two filenames (both dated 20260716) → two edition entries for the same
 meeting; harmless (same initiative, deduped per edition key).
-- **Dashboard format:** an HTML page in `Reports/` **dated per generation and
-  accumulating like the briefing** (a snapshot each run, not overwritten) — so
-  the evolution of the tracked state is on record. (Story workbooks still use
-  stable-name + overwrite for corrections; different artifact, different policy.)
+- **Dashboard format ✅ (built 2026-07-22):** an HTML page **dated per generation
+  and accumulating like the briefing** (a snapshot each run, never overwritten) —
+  so the evolution of the tracked state is on record. Published to
+  `Reports/Control/RR_Control-<ts>.html` (`config.published_control_dir`). Rows
+  expand to a per-edition mention timeline. (Story workbooks still use stable-name
+  + overwrite for corrections; different artifact, different policy.)
 
 ### RR data model & outputs (clarified 2026-07-21)
 
-- 🎯 **RR Control report** (persistent, from the watch list): one row per watched
-  RR ever — RR#, title, class, open/closed, **market initiative**, story link,
-  last updated. This is the "single control of all RRs" the team pictured. Today
-  only the **per-run** `SPP_RR_Report_Summary.xlsx` exists (lists just the RRs
-  processed that run — why only 3 RRs show even though 9 are downloaded).
+- ✅ **RR Control dashboard** (persistent, from the watch list; built 2026-07-22):
+  one row per watched RR — RR#, title, class, open/closed, **market initiative**
+  (+ candidate hint when none named), story link, last updated, expandable mention
+  history. This is the "single control of all RRs" the team pictured.
+  `src/summaries/rr_control.py` + `main.py rr-control` (standalone) + a hook in
+  `run`. Title is "<market> Settlement Changes Control"; classes are labeled
+  Settlement calc / Settlement review / Tariff-governance. (The per-run
+  `SPP_RR_Report_Summary.xlsx` still exists as the settlement intake artifact —
+  distinct from this bird's-eye board.)
 - **Market initiative lives in BOTH places** (not either/or): the RR Control
   report (bird's-eye) AND each story's description (the actionable detail a dev
   reads without cross-referencing).
