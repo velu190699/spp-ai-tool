@@ -13,7 +13,7 @@ from typing import Any
 # The five PCI areas, in display order. The engine must route every change to
 # one or more of these keys; the renderer supplies the colors.
 AREA_ORDER: list[tuple[str, str]] = [
-    ("market_systems", "Market Systems"),
+    ("rto_markets", "RTO Markets"),
     ("asset_operations", "Asset Operations"),
     ("transmissions", "Transmissions"),
     ("etrm", "ETRM"),
@@ -21,6 +21,16 @@ AREA_ORDER: list[tuple[str, str]] = [
 ]
 AREA_KEYS = [key for key, _ in AREA_ORDER]
 AREA_NAMES = dict(AREA_ORDER)
+
+# Per-area accent colors, shared by the HTML report (CSS --c-* vars) and the
+# Slack briefing (attachment color bars) so the two stay visually consistent.
+AREA_COLORS: dict[str, str] = {
+    "rto_markets": "#1f4e8c",      # blue
+    "asset_operations": "#1f7a4d",  # green
+    "transmissions": "#b4630a",     # amber
+    "etrm": "#6b3fa0",              # purple
+    "optimization": "#0f7c86",      # teal
+}
 
 
 class ReportValidationError(ValueError):

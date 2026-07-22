@@ -14,6 +14,46 @@ _SLACK_POST_MESSAGE_URL = "https://slack.com/api/chat.postMessage"
 # into multiple section blocks, splitting before this soft limit.
 _SLACK_SECTION_TEXT_LIMIT = 2900
 
+# Icons for the "what changed since last time" delta lines shared by the RR
+# Control and story-drafts messages. Keyed by change kind.
+_DELTA_ICONS = {
+    "new": ":new:",
+    "updated": ":arrows_counterclockwise:",
+    "closed": ":white_check_mark:",
+    "status": ":arrow_right:",
+}
+
+
+def format_delta_lines(changes: list[dict[str, Any]]) -> list[str]:
+    """Render ``[{kind, text}, ...]`` into mrkdwn bullet lines, icon by kind.
+
+    ``kind`` is one of new/updated/closed/status; an unknown kind falls back to a
+    plain bullet. ``text`` is already-formatted mrkdwn (may contain *bold*).
+    """
+    lines = []
+    for change in changes:
+        icon = _DELTA_ICONS.get(change.get("kind", ""), "•")
+        lines.append(f"• {icon} {change.get('text', '')}")
+    return lines
+
+
+def _deliver(payload: dict[str, Any], *, webhook_url: str, bot_token: str, channel: str, what: str) -> bool:
+    """Send a prebuilt payload via bot token (preferred) or webhook; never raises.
+
+    Shared by the newer notifications; mirrors the delivery rules of
+    ``send_slack_report_link``. Returns True only on a confirmed post.
+    """
+    if bot_token and channel:
+        ok = _post_via_bot(bot_token, channel, payload)
+    elif webhook_url:
+        ok = _post_via_webhook(webhook_url, payload)
+    else:
+        LOGGER.info("Slack not configured; %s notification skipped", what)
+        return False
+    if ok:
+        LOGGER.info("Posted %s notification to Slack", what)
+    return ok
+
 
 def format_slack_draft(relevant_rrs: list[dict[str, Any]], warnings: list[str]) -> str:
     lines = ["SPP RR automation draft notification", ""]
@@ -125,65 +165,63 @@ def format_report_link_message(
 
 
 def format_story_drafts_message(
-    report_title: str,
-    report_url: str,
     rr_links: list[tuple[str, str]],
+    *,
+    date_label: str = "",
+    changes: list[dict[str, Any]] | None = None,
     note: str = "",
 ) -> dict[str, Any]:
     """Build the Slack payload announcing per-RR Jira story templates.
 
-    More descriptive than the plain report link (Eduardo, 2026-07-20): the
-    settlement report link on top, then one linked line per RR pointing at that
-    RR's story-template workbook, so a PM opens the exact template from Slack.
-    ``rr_links`` is [(rr_id, workbook_url), …]; a blank url falls back to the
-    bare RR id. ``note`` replaces the body with a status line (e.g. a failure).
+    Leads with what changed this run (Eduardo, 2026-07-22): a heading, an
+    optional "New/updated this run" delta, then one linked line per RR pointing
+    at that RR's story-template workbook so a PM opens the exact template from
+    Slack. The standalone settlement-report link was dropped — the per-RR
+    templates are the deliverable. ``rr_links`` is [(rr_id, workbook_url), …]; a
+    blank url falls back to the bare RR id. ``note`` replaces the body with a
+    status line (e.g. a failure).
     """
     n = len(rr_links)
-    header = f"*{report_title}*"
+    suffix = f" — {date_label}" if date_label else ""
+    header = f":memo: *SPP RR story drafts{suffix}*"
     if note:
         body = f"{header}\n:warning: {note}"
-    elif report_url:
-        body = f"{header}\n<{report_url}|Open the settlement report in SharePoint>"
     else:
-        body = f"{header}\n_Report published locally; no SharePoint link available._"
+        body = f"{header}\n{n} RR story template{'' if n == 1 else 's'} ready for PM review."
     blocks: list[dict[str, Any]] = [{"type": "section", "text": {"type": "mrkdwn", "text": body}}]
 
-    tmpl_lines = [f"*Story templates for PM review ({n} RR{'' if n == 1 else 's'})*"]
+    if changes:
+        lines = ["*New/updated this run:*"] + format_delta_lines(changes)
+        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": "\n".join(lines)}})
+
+    tmpl_lines = ["*Story templates:*"]
     for rr, url in rr_links:
         tmpl_lines.append(f"• <{url}|{rr} story template>" if url else f"• {rr} story template (no link)")
     blocks.append({"type": "divider"})
     blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": "\n".join(tmpl_lines)}})
 
     rr_names = ", ".join(rr for rr, _ in rr_links)
-    fallback = f"{report_title} — templates: {rr_names}" if rr_links else report_title
+    fallback = f"SPP RR story drafts{suffix} — {rr_names}" if rr_links else f"SPP RR story drafts{suffix}"
     return {"text": fallback, "blocks": blocks}
 
 
 def send_slack_story_drafts(
-    report_title: str,
-    report_url: str,
     rr_links: list[tuple[str, str]],
     *,
+    date_label: str = "",
+    changes: list[dict[str, Any]] | None = None,
     webhook_url: str = "",
     bot_token: str = "",
     channel: str = "",
     note: str = "",
 ) -> bool:
-    """Post the story-templates announcement (report link + per-RR template links).
+    """Post the story-templates announcement (delta + per-RR template links).
 
     Same delivery rules as ``send_slack_report_link``; never raises.
     """
-    payload = format_story_drafts_message(report_title, report_url, rr_links, note)
-    if bot_token and channel:
-        ok = _post_via_bot(bot_token, channel, payload)
-    elif webhook_url:
-        ok = _post_via_webhook(webhook_url, payload)
-    else:
-        LOGGER.info("Slack not configured; story-drafts notification skipped")
-        return False
-    if ok:
-        LOGGER.info("Posted story-drafts notification to Slack (%d templates)", len(rr_links))
-    return ok
+    payload = format_story_drafts_message(rr_links, date_label=date_label, changes=changes, note=note)
+    return _deliver(payload, webhook_url=webhook_url, bot_token=bot_token, channel=channel,
+                    what=f"story-drafts ({len(rr_links)} templates)")
 
 
 def _post_via_webhook(webhook_url: str, payload: dict[str, Any]) -> bool:
@@ -285,3 +323,163 @@ def send_slack_report_link(
     if ok:
         LOGGER.info("Posted report link to Slack: %s", report_url or "(no link)")
     return ok
+
+
+# --------------------------------------------------------------------------- #
+# Option B #6 — distinct, well-crafted messages per report type.
+# --------------------------------------------------------------------------- #
+
+def format_heartbeat_message(
+    date_label: str,
+    watched_count: int,
+    control_url: str = "",
+) -> dict[str, Any]:
+    """A no-change weekly ``run`` heartbeat, so silence is never ambiguous.
+
+    Confirms the tool ran and found nothing new; links the RR Control dashboard
+    for the current watch list. Posted only when a run detected no new CUF/SUF
+    edition and no RR-level change.
+    """
+    body = (
+        f":zzz: *SPP weekly check — {date_label}*\n"
+        f"No new CUF/SUF materials and no RR changes since last week. "
+        f"Watching *{watched_count}* open settlement RR{'' if watched_count == 1 else 's'} — nothing to action."
+    )
+    blocks: list[dict[str, Any]] = [{"type": "section", "text": {"type": "mrkdwn", "text": body}}]
+    if control_url:
+        blocks.append({"type": "context", "elements": [
+            {"type": "mrkdwn", "text": f"<{control_url}|Open the RR Control dashboard>"}]})
+    return {"text": f"SPP weekly check — {date_label}: no changes", "blocks": blocks}
+
+
+def send_slack_heartbeat(
+    date_label: str,
+    watched_count: int,
+    *,
+    control_url: str = "",
+    webhook_url: str = "",
+    bot_token: str = "",
+    channel: str = "",
+) -> bool:
+    """Post the no-change heartbeat; same delivery rules; never raises."""
+    payload = format_heartbeat_message(date_label, watched_count, control_url)
+    return _deliver(payload, webhook_url=webhook_url, bot_token=bot_token, channel=channel, what="heartbeat")
+
+
+def _briefing_action_elements(report_url: str, control_url: str) -> list[dict[str, Any]]:
+    elements: list[dict[str, Any]] = []
+    if report_url:
+        elements.append({"type": "button", "style": "primary",
+                         "text": {"type": "plain_text", "text": "Open full report", "emoji": True},
+                         "url": report_url})
+    if control_url:
+        elements.append({"type": "button",
+                         "text": {"type": "plain_text", "text": "RR Control dashboard", "emoji": True},
+                         "url": control_url})
+    return elements
+
+
+def format_briefing_by_area(
+    date_label: str,
+    areas: list[dict[str, Any]],
+    *,
+    sources_line: str = "",
+    report_url: str = "",
+    control_url: str = "",
+) -> dict[str, Any]:
+    """All-teams briefing as one colored card per PCI area (the skim view).
+
+    ``areas`` is ``[{name, color, summary}, …]`` in display order — the area's
+    tight summary blurb, not a list of RRs. Each area renders as a Slack
+    attachment with its color bar. The action buttons live in a trailing
+    attachment so they appear BELOW the cards (top-level blocks always render
+    above attachments in Slack). Posted only when a new CUF/SUF edition arrived.
+    """
+    intro = "Weekly summary of SPP market changes by PCI area."
+    if sources_line:
+        intro += f"\n_{sources_line}_"
+    blocks: list[dict[str, Any]] = [
+        {"type": "header", "text": {"type": "plain_text", "text": f"SPP Market Changes — {date_label}", "emoji": True}},
+        {"type": "section", "text": {"type": "mrkdwn", "text": intro}},
+    ]
+
+    attachments: list[dict[str, Any]] = []
+    for area in areas:
+        summary = area.get("summary") or "_No notable changes this cycle._"
+        attachments.append({
+            "color": area.get("color", "#cccccc"),
+            "blocks": [{"type": "section", "text": {"type": "mrkdwn", "text": f"*{area['name']}*\n{summary}"}}],
+        })
+
+    elements = _briefing_action_elements(report_url, control_url)
+    if elements:
+        # A colorless trailing attachment keeps the buttons below every area card.
+        attachments.append({"blocks": [{"type": "actions", "elements": elements}]})
+
+    return {"text": f"SPP Market Changes — {date_label}", "blocks": blocks, "attachments": attachments}
+
+
+def send_slack_briefing_by_area(
+    date_label: str,
+    areas: list[dict[str, Any]],
+    *,
+    sources_line: str = "",
+    report_url: str = "",
+    control_url: str = "",
+    webhook_url: str = "",
+    bot_token: str = "",
+    channel: str = "",
+) -> bool:
+    """Post the by-area briefing; same delivery rules; never raises."""
+    payload = format_briefing_by_area(date_label, areas, sources_line=sources_line,
+                                      report_url=report_url, control_url=control_url)
+    return _deliver(payload, webhook_url=webhook_url, bot_token=bot_token, channel=channel, what="by-area briefing")
+
+
+def format_rr_control_message(
+    date_label: str,
+    watched_total: int,
+    class_counts: list[tuple[str, int]],
+    *,
+    changes: list[dict[str, Any]] | None = None,
+    control_url: str = "",
+) -> dict[str, Any]:
+    """The RR Control register summary with a "what changed" delta.
+
+    ``class_counts`` is ``[(label, count), …]`` (already human-labeled, e.g.
+    ("settlement calc", 5)); the header reads "Tracking N open RRs (5 settlement
+    calc · …)". ``changes`` is the delta ([{kind, text}]); the delta section is
+    shown only when non-empty — the no-change case is carried by the run
+    heartbeat, and the standalone dashboard refresh just states the register.
+    """
+    breakdown = " · ".join(f"{count} {label}" for label, count in class_counts if count)
+    tail = f" ({breakdown})" if breakdown else ""
+    body = (f":ledger: *SPP Settlement Changes Control — {date_label}*\n"
+            f"Tracking *{watched_total}* open RR{'' if watched_total == 1 else 's'}{tail}.")
+    blocks: list[dict[str, Any]] = [{"type": "section", "text": {"type": "mrkdwn", "text": body}}]
+    if changes:
+        lines = ["*What changed since the last update:*"] + format_delta_lines(changes)
+        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": "\n".join(lines)}})
+    if control_url:
+        blocks.append({"type": "actions", "elements": [
+            {"type": "button", "style": "primary",
+             "text": {"type": "plain_text", "text": "Open the control dashboard", "emoji": True},
+             "url": control_url}]})
+    return {"text": f"SPP Settlement Changes Control — {date_label}", "blocks": blocks}
+
+
+def send_slack_rr_control(
+    date_label: str,
+    watched_total: int,
+    class_counts: list[tuple[str, int]],
+    *,
+    changes: list[dict[str, Any]] | None = None,
+    control_url: str = "",
+    webhook_url: str = "",
+    bot_token: str = "",
+    channel: str = "",
+) -> bool:
+    """Post the RR Control register summary; same delivery rules; never raises."""
+    payload = format_rr_control_message(date_label, watched_total, class_counts,
+                                        changes=changes, control_url=control_url)
+    return _deliver(payload, webhook_url=webhook_url, bot_token=bot_token, channel=channel, what="RR control")

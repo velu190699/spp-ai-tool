@@ -183,32 +183,36 @@ def test_send_slack_failure_skips_when_unconfigured():
         post.assert_not_called()
 
 
-def test_format_story_drafts_message_lists_report_and_per_rr_templates():
+def test_format_story_drafts_message_lists_per_rr_templates_with_delta():
     from src.notifications.notifier import format_story_drafts_message
 
     payload = format_story_drafts_message(
-        "SPPIM settlement Jira story drafts — RR728, RR623 — PM review needed (July 20, 2026)",
-        "https://sp/report.xlsx?web=1",
         [("RR728", "https://sp/RR728_stories.xlsx"), ("RR623", "https://sp/RR623_stories.xlsx")],
+        date_label="July 22, 2026",
+        changes=[{"kind": "new", "text": "*RR728* first draft."}],
     )
     body = payload["blocks"][0]["text"]["text"]
-    assert "<https://sp/report.xlsx?web=1|Open the settlement report in SharePoint>" in body
+    assert "SPP RR story drafts — July 22, 2026" in body
+    assert "2 RR story templates ready for PM review" in body
+    # The standalone settlement-report link was dropped from this message.
+    assert "settlement report in SharePoint" not in body
     assert {"type": "divider"} in payload["blocks"]
     text = _section_text(payload)
-    assert "Story templates for PM review (2 RRs)" in text
+    assert "New/updated this run:" in text and "RR728" in text
+    assert "Story templates:" in text
     assert "<https://sp/RR728_stories.xlsx|RR728 story template>" in text
     assert "<https://sp/RR623_stories.xlsx|RR623 story template>" in text
     assert "RR728, RR623" in payload["text"]  # fallback names the RRs
 
 
-def test_format_story_drafts_message_handles_missing_links():
+def test_format_story_drafts_message_handles_missing_links_and_no_delta():
     from src.notifications.notifier import format_story_drafts_message
 
-    payload = format_story_drafts_message("Drafts", "", [("RR728", "")])
-    body = payload["blocks"][0]["text"]["text"]
-    assert "no SharePoint link available" in body           # report link absent
-    assert "RR728 story template (no link)" in _section_text(payload)  # per-RR link absent
-    assert "(1 RR)" in _section_text(payload)               # singular
+    payload = format_story_drafts_message([("RR728", "")], date_label="July 22, 2026")
+    text = _section_text(payload)
+    assert "1 RR story template ready" in payload["blocks"][0]["text"]["text"]  # singular
+    assert "New/updated this run:" not in text                # no delta section when empty
+    assert "RR728 story template (no link)" in text           # per-RR link absent
 
 
 def test_send_slack_story_drafts_posts_via_bot():
@@ -218,12 +222,69 @@ def test_send_slack_story_drafts_posts_via_bot():
     response.json.return_value = {"ok": True}
     with patch("src.notifications.notifier.requests.post", return_value=response) as post:
         assert send_slack_story_drafts(
-            "Drafts", "https://sp/report", [("RR728", "https://sp/rr728")],
+            [("RR728", "https://sp/rr728")], date_label="July 22, 2026",
             bot_token="xoxb-1", channel="#c",
         ) is True
         _, kwargs = post.call_args
         text = "\n".join(b["text"]["text"] for b in kwargs["json"]["blocks"] if b.get("type") == "section")
         assert "RR728 story template" in text
+
+
+def test_format_heartbeat_message():
+    from src.notifications.notifier import format_heartbeat_message
+
+    payload = format_heartbeat_message("July 22, 2026", 9, "https://sp/control")
+    body = payload["blocks"][0]["text"]["text"]
+    assert "SPP weekly check — July 22, 2026" in body
+    assert "Watching *9* open settlement RRs" in body
+    assert "no changes" in payload["text"]
+    ctx = payload["blocks"][1]["elements"][0]["text"]
+    assert "<https://sp/control|Open the RR Control dashboard>" in ctx
+
+
+def test_format_briefing_by_area_uses_colored_cards_and_bottom_buttons():
+    from src.notifications.notifier import format_briefing_by_area
+
+    areas = [
+        {"name": "RTO Markets", "color": "#1f4e8c", "summary": "Fall bundle coming."},
+        {"name": "ETRM", "color": "#6b3fa0", "summary": ""},  # empty -> degrades
+    ]
+    payload = format_briefing_by_area(
+        "July 22, 2026", areas, sources_line="CUF Jul · SUF Apr",
+        report_url="https://sp/report", control_url="https://sp/control",
+    )
+    # header + intro in top-level blocks; area cards + a trailing action attachment.
+    assert payload["blocks"][0]["type"] == "header"
+    assert [a["color"] for a in payload["attachments"] if "color" in a] == ["#1f4e8c", "#6b3fa0"]
+    assert "RTO Markets" in payload["attachments"][0]["blocks"][0]["text"]["text"]
+    assert "No notable changes" in payload["attachments"][1]["blocks"][0]["text"]["text"]
+    # Buttons live in the LAST attachment so they render below every card.
+    last = payload["attachments"][-1]
+    assert "color" not in last and last["blocks"][0]["type"] == "actions"
+    labels = [e["text"]["text"] for e in last["blocks"][0]["elements"]]
+    assert labels == ["Open full report", "RR Control dashboard"]
+
+
+def test_format_rr_control_message_with_and_without_delta():
+    from src.notifications.notifier import format_rr_control_message
+
+    with_delta = format_rr_control_message(
+        "July 22, 2026", 9, [("settlement calc", 5), ("tariff / governance", 3), ("unused", 0)],
+        changes=[{"kind": "new", "text": "*RR786* added."},
+                 {"kind": "updated", "text": "*RR728* re-published."}],
+        control_url="https://sp/control",
+    )
+    body = with_delta["blocks"][0]["text"]["text"]
+    assert "Tracking *9* open RRs (5 settlement calc · 3 tariff / governance)" in body
+    assert "0 unused" not in body  # zero-count classes are dropped
+    text = _section_text(with_delta)
+    assert "What changed since the last update:" in text and "RR786" in text
+    assert with_delta["blocks"][-1]["elements"][0]["url"] == "https://sp/control"
+
+    # With no delta, only the register line (and button if any) — no delta section.
+    empty = format_rr_control_message("July 22, 2026", 9, [("settlement calc", 9)])
+    assert "What changed" not in _section_text(empty)
+    assert len(empty["blocks"]) == 1  # just the register summary
 
 
 def test_relevant_rr_line_marks_updated_rrs():

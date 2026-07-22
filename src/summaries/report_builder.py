@@ -36,11 +36,11 @@ _AREA_LIST = "\n".join(f"- {name} (key: {key})" for key, name in AREA_ORDER)
 # topic lists; this fallback keeps the report running, nothing more.
 _FALLBACK_HINTS = """
 Area routing hints:
-- Market Systems: settlements, charge codes, billing determinants, bidding, Markets+, RTOE, FO/BO.
+- RTO Markets: FO (bilateral settlements, services, ISO Communication tasks), BO (settlements, charge codes, billing determinants), bidding, Markets+, RTOE.
 - Asset Operations: CROW, resource adequacy, generation, outage management.
-- Transmissions: transmission scheduling, WebCheckout, OASIS, TPO, e-tag, EDAM/M+ BA, Order 881.
-- ETRM: e-tag/transmission data, deal calcs.
-- Optimization: DART Trader, GenTrader, battery/storage, forecasting, post analysis."""
+- Transmissions: transmission scheduling, WebCheckout, OASIS, TPO, e-tag, EDAM/M+ BA.
+- ETRM: e-tag/transmission data, deal calcs, bilateral settlements (data, no ISO Communication tasks).
+- Optimization: DART Trader, GenTrader, battery, forecasting."""
 
 
 def build_area_guide(routing_file: Path | None = None) -> str:
@@ -81,7 +81,7 @@ _SCHEMA = """{
   },
   "areas": [
     {
-      "key": "one of: market_systems | asset_operations | transmissions | etrm | optimization",
+      "key": "one of: rto_markets | asset_operations | transmissions | etrm | optimization",
       "summary": "tight card blurb for the skim view (1-2 sentences, NO impact flags)",
       "items": [
         {
@@ -114,7 +114,7 @@ from the CUF and SUF meeting materials provided in the piped input.
 Do NOT use any tools. Do NOT read files. Use ONLY the document text provided in the
 input. Respond with a SINGLE JSON object and nothing else — no prose, no markdown fences.
 
-The five PCI areas (route every change to one or more; include all five even if empty):
+The five PCI areas (route every change to one or more; show all five even if empty):
 {guide}
 
 The JSON must match this exact schema:

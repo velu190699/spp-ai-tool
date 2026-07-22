@@ -53,16 +53,16 @@ def test_area_guide_reads_repo_routing_yaml():
     guide = build_area_guide(Path("config/area_routing.yaml"))
     # The two SME corrections from the 2026-07 feedback meeting must be present.
     assert "WEIS / SPP West wind-down" in guide
-    assert "BOTH ETRM and Market Systems" in guide
+    assert "BOTH ETRM and RTO Markets" in guide
     # All five areas are still listed for the router.
-    for key in ("market_systems", "asset_operations", "transmissions", "etrm", "optimization"):
+    for key in ("rto_markets", "asset_operations", "transmissions", "etrm", "optimization"):
         assert key in guide
 
 
 def test_area_guide_falls_back_when_file_missing(tmp_path):
     guide = build_area_guide(tmp_path / "does-not-exist.yaml")
     assert "Area routing hints:" in guide
-    assert "market_systems" in guide
+    assert "rto_markets" in guide
 
 
 def test_area_guide_survives_broken_yaml(tmp_path):

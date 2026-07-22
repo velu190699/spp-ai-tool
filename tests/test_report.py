@@ -37,7 +37,7 @@ def test_report_model_fills_all_areas_from_stub():
     engine = StubEngine()
     report = ReportData.from_dict(engine.generate("i", "c"))
     keys = {a.key for a in report.areas}
-    assert "market_systems" in keys
+    assert "rto_markets" in keys
     assert len(report.narrative) >= 1
 
 

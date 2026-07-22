@@ -151,7 +151,7 @@ _SAMPLE_REPORT: dict = {
     },
     "areas": [
         {
-            "key": "market_systems",
+            "key": "rto_markets",
             "summary": "Web services V23/V18 confirmed; fall settlement bundle coming.",
             "items": [
                 {
@@ -176,7 +176,7 @@ _SAMPLE_REPORT: dict = {
         {
             "heading": "RTO Expansion go-live and WEIS wind-down",
             "paragraphs": ["RTO Expansion went live across the Western Interconnection on April 1, 2026."],
-            "impact": "Impactful: new settlement charge/credit types → Market Systems settlement config.",
+            "impact": "Impactful: new settlement charge/credit types → RTO Markets settlement config.",
             "sources": [{"label": "SUF Meeting Materials 20260409, p.6", "url": ""}],
         }
     ],

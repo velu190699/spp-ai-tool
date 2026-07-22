@@ -12,7 +12,7 @@ from src.summaries.report_model import ReportData
 
 # Map area keys to the short CSS codes used by the stylesheet.
 _AREA_CODE = {
-    "market_systems": "ms",
+    "rto_markets": "ms",
     "asset_operations": "ao",
     "transmissions": "tx",
     "etrm": "et",

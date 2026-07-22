@@ -33,8 +33,10 @@ from src.documents.rr_extractor import candidate_initiative, initiative_from_con
 from src.documents.zip_utils import extract_first_recommendation_report, extract_pdfs
 from src.notifications.notifier import (
     log_slack_draft,
+    send_slack_briefing_by_area,
     send_slack_failure,
-    send_slack_report_link,
+    send_slack_heartbeat,
+    send_slack_rr_control,
     send_slack_story_drafts,
 )
 from src.settlement import jira_template_writer, rr_structure, screenshots
@@ -44,6 +46,7 @@ from src.summaries import rr_control
 from src.summaries.html_renderer import render_report
 from src.summaries.report_builder import DocumentText, build_report
 from src.summaries.report_engine import build_engine
+from src.summaries.report_model import AREA_COLORS, AREA_ORDER
 from src.summaries.summarizer import build_run_summary
 
 LOGGER = logging.getLogger(__name__)
@@ -593,6 +596,16 @@ def generate_rr_control() -> int:
     apply_initiative_overrides(state, config)
     html_path, url = build_rr_control_html(state, config, run_id)
     state.save()  # persist accumulation + any rr_class discovered during classification
+    # Announce the refreshed register (no delta — this offline rebuild doesn't
+    # detect changes; the run flow carries the "what changed" deltas).
+    open_watched = state.list_watched(status="open")
+    send_slack_rr_control(
+        datetime.now().strftime("%B %d, %Y"), len(open_watched), _class_counts(open_watched),
+        control_url=url,
+        webhook_url=config.slack_webhook_url,
+        bot_token=config.slack_bot_token,
+        channel=config.slack_channel,
+    )
     for warning in warnings:
         LOGGER.warning(warning)
     LOGGER.info("RR Control dashboard: %s", url or html_path)
@@ -771,6 +784,9 @@ def run(dry_run: bool) -> int:
     # (a superset of the latest relevant list), so a late revision to an RR that
     # dropped out of the newest CUF/SUF is still caught. dry-run keeps its
     # discovery-only view over the relevant list and never mutates the watch list.
+    # Snapshot the watch list BEFORE refreshing so we can report what changed
+    # this run (RRs newly added, RRs that flipped open->closed) in Slack.
+    prior_watch = {} if dry_run else {w["rr_number"]: w.get("status", "") for w in state.list_watched()}
     download_rrs = relevant_rrs if dry_run else _refresh_watch_list(state, relevant_rrs, open_rrs)
     if not dry_run:
         # Recover initiatives named only in OLDER editions (backfills on first
@@ -796,15 +812,16 @@ def run(dry_run: bool) -> int:
         if str(rr.get("rr_number")) in updated_nums:
             rr["updated"] = True
 
-    log_slack_draft(relevant_rrs, warnings)
+    # What changed this run (Option B #6): RRs newly added to the watch list, and
+    # RRs that flipped open->closed since the snapshot taken above.
+    newly_added: list[str] = []
+    newly_closed: list[str] = []
+    if not dry_run:
+        now_watch = {w["rr_number"]: w.get("status", "") for w in state.list_watched()}
+        newly_added = [n for n in now_watch if n not in prior_watch]
+        newly_closed = [n for n in now_watch if prior_watch.get(n) == "open" and now_watch[n] == "closed"]
 
-    # Decoupled triggers (Option B): the all-teams HTML briefing is rebuilt and
-    # posted ONLY when a new CUF/SUF edition arrived — its content is
-    # slide-derived, so an RR-only change never rebuilds it (RR changes travel
-    # via the settlement outputs instead). dry runs never notify. (Heartbeat for
-    # a truly no-change run lands with the notification rework.)
-    if not dry_run and (cuf_is_new or suf_is_new):
-        notify_slack_report(config, warnings, run_id, relevant_rrs)
+    log_slack_draft(relevant_rrs, warnings)
 
     run_summary = build_run_summary(
         run_id=run_id,
@@ -824,13 +841,25 @@ def run(dry_run: bool) -> int:
             # Carry the cross-reference in the shared store so `report` (and
             # runs on other machines) reuse it without walking local files.
             state.save_relevant_rrs(relevant_rrs)
-        # Refresh the persistent RR Control dashboard from the updated watch list
-        # (dated + accumulating). A render failure must not sink the run.
+        # Refresh the persistent RR Control dashboard FIRST (dated + accumulating)
+        # so the Slack messages can link to it. A render failure must not sink the
+        # run or its notifications.
+        control_url = ""
         try:
-            build_rr_control_html(state, config, run_id)
+            _, control_url = build_rr_control_html(state, config, run_id)
         except Exception as exc:
             LOGGER.exception("RR Control dashboard build failed")
             warnings.append(f"RR Control dashboard failed: {exc}")
+        # Distinct, well-crafted Slack per situation (Option B #6): a by-area
+        # briefing on a new CUF/SUF edition, an RR Control delta on any RR-level
+        # change, and a heartbeat when nothing changed so silence is never
+        # ambiguous.
+        _notify_run(
+            config, warnings, run_id, relevant_rrs, state,
+            new_edition=bool(cuf_is_new or suf_is_new),
+            newly_added=newly_added, updated_nums=updated_nums,
+            newly_closed=newly_closed, control_url=control_url,
+        )
         state.append_run({"run_id": run_id, "report_path": str(report_path), "relevant_count": len(relevant_rrs)})
         state.save()
     else:
@@ -914,20 +943,22 @@ def build_market_changes_html(
     warnings: list[str],
     run_id: str,
     relevant_rrs: list[dict[str, Any]],
-) -> tuple[Path | None, str]:
+) -> tuple[Path | None, str, Any]:
     """Build the SPP Market Changes Summary HTML and publish it.
 
     Reads the latest local CUF/SUF materials, renders the report, writes it to
     ``published_reports_dir`` (the synced SharePoint "Reports" library), and
-    returns ``(html_path, sharepoint_url)``. Returns ``(None, "")`` when no CUF
-    or SUF materials are available, appending a warning instead of raising, so
-    the automated ``run`` flow can still notify without a report.
+    returns ``(html_path, sharepoint_url, report)`` — ``report`` is the validated
+    ``ReportData`` so callers can build the by-area Slack briefing from the same
+    model. Returns ``(None, "", None)`` when no CUF or SUF materials are
+    available, appending a warning instead of raising, so the automated ``run``
+    flow can still notify without a report.
     """
     cuf = latest_cuf_edition(config.cuf_dir, config.sharepoint_sync_root, config.sharepoint_base_url)
     suf = latest_suf_edition(config.suf_dir, config.sharepoint_sync_root, config.sharepoint_base_url)
     if not cuf and not suf:
         warnings.append("No CUF or SUF materials found in the synced SharePoint folders; skipping HTML report")
-        return None, ""
+        return None, "", None
 
     documents: list[DocumentText] = []
     cuf_label = suf_label = "not found"
@@ -964,20 +995,111 @@ def build_market_changes_html(
     # The HTML lives in the synced SharePoint "Reports" library, so map its local
     # path back to a clickable web link for the Slack notification.
     report_url = to_sharepoint_url(html_path, config.sharepoint_sync_root, config.sharepoint_base_url)
-    return html_path, report_url
+    return html_path, report_url, report
 
 
-def notify_slack_report(config, warnings: list[str], run_id: str, relevant_rrs: list[dict[str, Any]]) -> None:
-    """Build+publish the HTML report and post it to Slack with the RR list.
+def _briefing_areas(report: Any) -> tuple[list[dict[str, Any]], str]:
+    """Turn a ReportData into the colored per-area cards for the Slack briefing.
+
+    One card per PCI area in display order, carrying the area's skim-view summary
+    and its accent color. Returns ``(areas, sources_line)``.
+    """
+    by_key = {a.key: a for a in getattr(report, "areas", [])}
+    areas = []
+    for key, name in AREA_ORDER:
+        area = by_key.get(key)
+        areas.append({
+            "name": name,
+            "color": AREA_COLORS.get(key, "#cccccc"),
+            "summary": area.summary if area else "",
+        })
+    sources_line = getattr(getattr(report, "meta", None), "sources_line", "") or ""
+    return areas, sources_line
+
+
+# Human labels for the RR classes, in the order they appear in the RR Control
+# register summary line.
+_CLASS_LABELS = {
+    "SETTLEMENT_CALC": "settlement calc",
+    "SETTLEMENT_RELEVANT": "settlement review",
+    "TARIFF_GOVERNANCE": "tariff / governance",
+    "": "unclassified",
+}
+_CLASS_ORDER = ["SETTLEMENT_CALC", "SETTLEMENT_RELEVANT", "TARIFF_GOVERNANCE", ""]
+
+
+def _class_counts(watched: list[dict[str, Any]]) -> list[tuple[str, int]]:
+    """[(human label, count)] per RR class, in register order, non-zero only."""
+    counts: dict[str, int] = {}
+    for w in watched:
+        counts[w.get("rr_class") or ""] = counts.get(w.get("rr_class") or "", 0) + 1
+    return [(_CLASS_LABELS.get(c, c or "unclassified"), counts[c]) for c in _CLASS_ORDER if counts.get(c)]
+
+
+def _rr_control_changes(
+    state: MetadataStore, newly_added: list[str], updated_nums: set[str], newly_closed: list[str]
+) -> list[dict[str, Any]]:
+    """Build the RR Control delta ([{kind, text}]) from this run's flags.
+
+    Reuses the existing signals (watch-list membership, the re-published-package
+    ``updated`` flag, open->closed status) rather than a full historical snapshot.
+    A brand-new RR is reported as 'new', not also as 'updated'.
+    """
+    def label(num: str) -> str:
+        title = (state.get_watched(num) or {}).get("title", "")
+        return f"*RR{num}*" + (f" {title}" if title else "")
+
+    added = set(newly_added)
+    changes: list[dict[str, Any]] = []
+    for num in newly_added:
+        changes.append({"kind": "new", "text": f"{label(num)} added to the watch list (new in the latest materials)."})
+    for num in sorted(updated_nums - added):
+        changes.append({"kind": "updated", "text": f"{label(num)} — Recommendation Report re-published; any story is now stale."})
+    for num in newly_closed:
+        changes.append({"kind": "closed", "text": f"{label(num)} closed in the RR Master List — captured and removed from the watch list."})
+    return changes
+
+
+def _notify_run(
+    config, warnings: list[str], run_id: str, relevant_rrs: list[dict[str, Any]], state: MetadataStore,
+    *, new_edition: bool, newly_added: list[str], updated_nums: set[str],
+    newly_closed: list[str], control_url: str,
+) -> None:
+    """Post the situation-appropriate Slack message(s) for a completed run."""
+    slack = dict(webhook_url=config.slack_webhook_url, bot_token=config.slack_bot_token, channel=config.slack_channel)
+    date_label = datetime.now().strftime("%B %d, %Y")
+
+    # 1. A new CUF/SUF edition -> the all-teams by-area briefing.
+    if new_edition:
+        notify_slack_report(config, warnings, run_id, relevant_rrs, control_url=control_url)
+
+    # 2. Any RR-level change -> the RR Control register with the "what changed" delta.
+    changes = _rr_control_changes(state, newly_added, updated_nums, newly_closed)
+    if changes:
+        open_watched = state.list_watched(status="open")
+        send_slack_rr_control(
+            date_label, len(open_watched), _class_counts(open_watched),
+            changes=changes, control_url=control_url, **slack,
+        )
+
+    # 3. Nothing changed at all -> the heartbeat, so silence is never ambiguous.
+    if not new_edition and not changes:
+        send_slack_heartbeat(date_label, len(state.list_watched(status="open")), control_url=control_url, **slack)
+
+
+def notify_slack_report(config, warnings: list[str], run_id: str,
+                        relevant_rrs: list[dict[str, Any]], control_url: str = "") -> None:
+    """Build+publish the HTML report and post the by-area briefing to Slack.
 
     Report generation must never sink the surrounding command, so a build
     failure is logged and turned into a warning; the channel is still notified
-    (with the RR list and no link) so a failed report doesn't go unnoticed.
+    (a plain status line, no link) so a failed report doesn't go unnoticed.
     """
     report_url = ""
+    report = None
     note = ""
     try:
-        html_path, report_url = build_market_changes_html(config, warnings, run_id, relevant_rrs)
+        html_path, report_url, report = build_market_changes_html(config, warnings, run_id, relevant_rrs)
         if html_path is None:
             # No CUF/SUF materials — build_market_changes_html already warned.
             note = "No CUF/SUF materials available; report not generated."
@@ -985,16 +1107,29 @@ def notify_slack_report(config, warnings: list[str], run_id: str, relevant_rrs: 
         LOGGER.exception("Failed to build the HTML report for the Slack notification")
         warnings.append(f"HTML report generation failed: {exc}")
         note = "Report generation failed; see the run log for details."
-    report_title = f"SPP Market Changes Summary — {datetime.now().strftime('%B %d, %Y')}"
-    send_slack_report_link(
-        report_title,
-        report_url,
-        webhook_url=config.slack_webhook_url,
-        bot_token=config.slack_bot_token,
-        channel=config.slack_channel,
-        relevant_rrs=relevant_rrs,
-        note=note,
-    )
+    date_label = datetime.now().strftime("%B %d, %Y")
+    if report is not None:
+        areas, sources_line = _briefing_areas(report)
+        send_slack_briefing_by_area(
+            date_label, areas,
+            sources_line=sources_line,
+            report_url=report_url,
+            control_url=control_url,
+            webhook_url=config.slack_webhook_url,
+            bot_token=config.slack_bot_token,
+            channel=config.slack_channel,
+        )
+    else:
+        # No report to summarize by area — fall back to a plain status line so a
+        # failed/empty briefing still reaches the channel.
+        send_slack_report_link(
+            f"SPP Market Changes Summary — {date_label}",
+            report_url,
+            webhook_url=config.slack_webhook_url,
+            bot_token=config.slack_bot_token,
+            channel=config.slack_channel,
+            note=note or "No report available.",
+        )
 
 
 def generate_report() -> int:
@@ -1008,19 +1143,20 @@ def generate_report() -> int:
     # Prefer the shared store (works across machines); fall back to local files.
     state = MetadataStore(config.state_file, legacy_path=Path("data/state/metadata.json"))
     relevant_rrs = state.load_relevant_rrs() or _load_latest_relevant_rrs(config.reports_dir)
-    html_path, report_url = build_market_changes_html(config, warnings, run_id, relevant_rrs)
+    html_path, report_url, report = build_market_changes_html(config, warnings, run_id, relevant_rrs)
     if html_path is None:
         raise RuntimeError("No CUF or SUF materials found in the synced SharePoint folders")
 
-    # Announce the published report in Slack, including the relevant RR list.
-    report_title = f"SPP Market Changes Summary — {datetime.now().strftime('%B %d, %Y')}"
-    send_slack_report_link(
-        report_title,
-        report_url,
+    # Announce the published report in Slack as the by-area briefing.
+    date_label = datetime.now().strftime("%B %d, %Y")
+    areas, sources_line = _briefing_areas(report)
+    send_slack_briefing_by_area(
+        date_label, areas,
+        sources_line=sources_line,
+        report_url=report_url,
         webhook_url=config.slack_webhook_url,
         bot_token=config.slack_bot_token,
         channel=config.slack_channel,
-        relevant_rrs=relevant_rrs,
     )
 
     for warning in warnings:
@@ -1060,6 +1196,7 @@ def generate_settlement_report(
     # (full re-run over the cache, ignoring the watch list and the ledger).
     analysis_records: list[tuple[str, str]] = []  # (rr_key, input_hash) to record on success
     closed_to_prune: list[str] = []               # watched RRs now closed -> drop after this run
+    draft_kinds: dict[str, str] = {}              # rr digits -> "new" | "updated" for the Slack delta
     if not files and not links:
         candidates = _latest_rr_docx_files(config.recommendation_reports_dir)
         if not candidates:
@@ -1084,6 +1221,7 @@ def generate_settlement_report(
                 continue
             if ledger == "updated":
                 LOGGER.info("RR%s: Recommendation Report changed since last processing — re-analyzing (UPDATE)", rr_num)
+            draft_kinds[rr_num] = "updated" if ledger == "updated" else "new"
             files.append(path)
             analysis_records.append((f"RR{rr_num}", input_hash))
         if not files:
@@ -1144,18 +1282,9 @@ def generate_settlement_report(
         shutil.copy2(out_path, published_path)
         LOGGER.info("Settlement report published: %s", published_path)
 
-    # Every published report notifies the channel, not just the HTML briefing
-    # (Eduardo, 2026-07-17).
-    rr_ids = [str(res["report"].get("rr_id", "?")) for res in results]
-    report_url = to_sharepoint_url(Path(published_path), config.sharepoint_sync_root, config.sharepoint_base_url)
-    send_slack_report_link(
-        f"SPPIM settlement RR report — {', '.join(rr_ids)} ({datetime.now().strftime('%B %d, %Y')})",
-        report_url,
-        webhook_url=config.slack_webhook_url,
-        bot_token=config.slack_bot_token,
-        channel=config.slack_channel,
-        note="" if report_url else "Report written locally; no SharePoint link available.",
-    )
+    # The standalone settlement-report link message was retired (Eduardo,
+    # 2026-07-22) — the combined xlsx is being phased out and the per-RR story
+    # templates (below, under --stories) are the deliverable the channel needs.
 
     # Record what was processed at which content version, so the next run
     # skips these RRs until SPP re-publishes them (UPDATE detection).
@@ -1203,13 +1332,19 @@ def generate_settlement_report(
             rr_links.append((rr_id, to_sharepoint_url(jira_out, config.sharepoint_sync_root, config.sharepoint_base_url)))
             LOGGER.info("Story workbook written for %s: %s (%d screenshot pages)", rr_id, jira_out.name, len(shots.get(rr_id, [])))
         if written:
-            # One descriptive message: report link on top, then a link to each
-            # RR's story template (Eduardo, 2026-07-20).
+            # Lead with what changed this run, then a link to each RR's story
+            # template (Eduardo, 2026-07-22). "updated" = the RR package was
+            # re-published since we last analyzed it; otherwise a first draft.
+            changes = []
+            for rr_id, _ in rr_links:
+                digits = "".join(ch for ch in rr_id if ch.isdigit())
+                kind = draft_kinds.get(digits, "new")
+                verb = "regenerated after a re-published RR package" if kind == "updated" else "first story draft"
+                changes.append({"kind": kind, "text": f"*{rr_id}* — {verb}."})
             send_slack_story_drafts(
-                f"SPPIM settlement Jira story drafts — {', '.join(rr for rr, _ in rr_links)} "
-                f"— PM review needed ({datetime.now().strftime('%B %d, %Y')})",
-                report_url,
                 rr_links,
+                date_label=datetime.now().strftime("%B %d, %Y"),
+                changes=changes,
                 webhook_url=config.slack_webhook_url,
                 bot_token=config.slack_bot_token,
                 channel=config.slack_channel,
