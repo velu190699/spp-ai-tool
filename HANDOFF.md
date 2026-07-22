@@ -46,6 +46,12 @@ Large session; **everything committed, working tree clean, 110 tests passing.**
      Settlement review / Tariff-governance; candidate-initiative hint when none named.
      Published a real dated snapshot to the synced folder + reviewed visually.
    - **(6) heartbeat** + **Slack by-area** briefing (RRs under Market Systems). NOT built.
+   - ⚠️ **Coverage caveat (found 2026-07-22):** the tool parses ONLY the CUF/SUF
+     editions in the synced team folder (`Published Documents/{CUF,SUF}`). A
+     SharePoint cross-check found a **May 2026 CUF** in a *personal* OneDrive
+     (`SPP Agent Project/Documentation/`), never parsed. It only named RR728
+     (already covered), so no impact — but the team must ensure every edition
+     lands in the synced folder, not personal drives. See RUNBOOK §5 coverage caveat.
 2. A real end-to-end run to exercise the full flow (first run re-downloads sources once).
 3. Confirm with Miquel his sync app reads workbooks from `Stories/BO/`.
 4. Schedule the weekly task (Mon 10:00, "run only when user is logged on").

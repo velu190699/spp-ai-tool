@@ -176,6 +176,18 @@ name like "RTO Expansion Project" count as RR750's initiative? Not hardcoded —
 the locked rule is verbatim-from-slide, never invent. NOTE: SPP synced the July
 CUF under two filenames (both dated 20260716) → two edition entries for the same
 meeting; harmless (same initiative, deduped per edition key).
+
+> ⚠️ **Coverage caveat — editions must be in the SYNCED team folder.** The tool
+> parses ONLY the CUF/SUF editions present under `${SPP_SYNC_ROOT}/<market>/
+> Published Documents/{CUF,SUF}`. A cross-check against SharePoint (2026-07-22)
+> found a **May 2026 CUF** edition sitting in a personal OneDrive
+> (`SPP Agent Project/Documentation/cuf meeting materials 20260521.zip`), NOT in
+> the team folder — so it was never parsed. (Checked anyway: its Settlement
+> Releases slide names only RR728, already covered — no impact on the blanks.)
+> **Operational rule for the team:** every CUF/SUF edition must land in the
+> synced Published Documents folder, not a personal OneDrive, or the tool can't
+> see it. A `run` downloads new editions from spp.org into that folder
+> automatically; manually-placed historical editions must go there too.
 - **Dashboard format ✅ (built 2026-07-22):** an HTML page **dated per generation
   and accumulating like the briefing** (a snapshot each run, never overwritten) —
   so the evolution of the tracked state is on record. Published to
