@@ -486,14 +486,26 @@ def _enrich_watch_details(state: MetadataStore, config) -> None:
         })
 
 
-def _rr_story_url_resolver(state: MetadataStore, config):
-    """Map an RR number to the SharePoint link of the settlement report that covered it."""
+def _rr_story_url_resolver(config):
+    """Map an RR number to the SharePoint link of its latest Jira story workbook.
+
+    Points the RR Control "Story" column at the per-RR Jira story Excel in the
+    synced Stories folder (``Stories/BO/RR<n>_Jira_Stories-<run_id>.xlsx``) — the
+    concrete deliverable a reviewer opens, not the settlement summary. The
+    ``_Jira_Stories`` separator keeps the match exact (RR623 never catches
+    RR6230), and the sortable ``YYYYMMDD-HHMMSS`` run id means the
+    lexicographically-last match is the newest; older versions are rotated into
+    ``Archive/`` and intentionally not linked here. Returns "" when no workbook
+    exists yet (the dashboard then shows an em dash)."""
+    stories_dir = config.jira_stories_dir
+
     def resolve(rr: str) -> str:
-        entry = state.get_analysis("settlement_report", f"RR{rr}")
-        report_path = (entry or {}).get("outputs", {}).get("report", "")
-        if not report_path:
+        if not stories_dir.exists():
             return ""
-        return to_sharepoint_url(Path(report_path), config.sharepoint_sync_root, config.sharepoint_base_url)
+        matches = sorted(stories_dir.glob(f"RR{rr}_Jira_Stories-*.xlsx"))
+        if not matches:
+            return ""
+        return to_sharepoint_url(matches[-1], config.sharepoint_sync_root, config.sharepoint_base_url)
     return resolve
 
 
@@ -550,7 +562,8 @@ def build_rr_control_html(state: MetadataStore, config, run_id: str, *, state_no
     """Render the persistent RR Control dashboard and publish it (dated, accumulating).
 
     Reads the whole watch list (open + closed), enriches each RR with its class
-    (from the docx) and story link (from the settlement ledger), writes a dated
+    (from the docx) and story link (its latest Jira story workbook in the synced
+    Stories folder), writes a dated
     HTML snapshot to the synced ``Reports/Control`` folder, and returns
     ``(html_path, sharepoint_url)``. Classification may persist ``rr_class`` onto
     the watch list, so the caller should ``state.save()`` afterwards.
@@ -558,7 +571,7 @@ def build_rr_control_html(state: MetadataStore, config, run_id: str, *, state_no
     _enrich_watch_details(state, config)  # persist class / determinants / mp_impact
     rows = rr_control.build_rr_control_rows(
         state.list_watched(),
-        story_url_of=_rr_story_url_resolver(state, config),
+        story_url_of=_rr_story_url_resolver(config),
         changes_of=_rr_charge_changes_resolver(config),
     )
     market = config.state_file.parent.parent.name  # <root>/<market>/State/metadata.json

@@ -256,7 +256,6 @@ _TEMPLATE = """<!DOCTYPE html>
 
   <div class="stats">
     <div class="stat"><div class="n">{{ stats.total }}</div><div class="l">Watched RRs</div></div>
-    <div class="stat"><div class="n">{{ stats.open }}</div><div class="l">Open</div></div>
     <div class="stat"><div class="n">{{ stats.settlement_calc }}</div><div class="l">Settlement calc</div></div>
     <div class="stat"><div class="n">{{ stats.with_initiative }}</div><div class="l">With initiative</div></div>
     <div class="stat"><div class="n">{{ stats.with_story }}</div><div class="l">With story</div></div>
