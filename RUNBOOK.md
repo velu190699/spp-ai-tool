@@ -257,21 +257,42 @@ meeting; harmless (same initiative, deduped per edition key).
 
 ---
 
-## 8. Scheduling the task (when we set it up)
+## 8. Scheduling the task
 
-Windows Task Scheduler, **not yet created**:
-- Trigger: weekly, Monday 10:00.
-- Security option: **Run only when user is logged on** (see §3).
-- Action: a wrapper that runs `python main.py run` and, on success, chains
-  `python main.py settlement-report --call-claude --stories` (target flow), from
-  the repo directory with the project's `.env` in scope.
-- Validate once by hand before trusting it; watch the Word COM render.
+Windows Task Scheduler, registered by `setup_scheduler.ps1` (**a single
+end-to-end task**, `SPP-RR-Automation`):
+- Trigger: weekly, default **Monday 10:00** (`-DayOfWeek` / `-Hour` override it).
+- Security option: **Run only when user is logged on** (`-LogonType Interactive`;
+  see §3 — Word COM needs a real desktop session).
+- Action: `run_agent.bat`, which runs `python main.py run` and, **on success**,
+  chains `python main.py settlement-report --call-claude --stories` (the §3 target
+  flow). If `run` fails the job aborts before settlement (main.py posts a Slack
+  failure alert). The `.bat` activates `.venv` **only if it exists**, otherwise it
+  uses the system Python — so it works whether or not a machine has a venv.
+- The old separate `SPP-RR-Report` task was **removed**: `run` already
+  regenerates the briefing when a new CUF/SUF edition lands (Option B), so a
+  forced weekly briefing was pure noise/cost. `run_report.bat` stays as a manual,
+  unscheduled escape hatch.
+- ⚠️ **Register on exactly ONE machine.** State (`State/metadata.json`) lives in
+  the synced folder and Slack posts go to a real team channel — two schedulers
+  would duplicate Slack, double the LLM cost, and race on the ledger. This laptop
+  (`eoyarce`) is the fully-configured owner; whoever else has a working `.env`
+  could own it instead, but never both at once.
 
-Manual full run (until scheduled):
+Register / manage:
+```
+.\setup_scheduler.ps1                     # weekly Monday 10:00
+.\setup_scheduler.ps1 -DayOfWeek Wednesday -Hour 8
+.\setup_scheduler.ps1 -Remove             # delete the task
+Start-ScheduledTask -TaskName SPP-RR-Automation   # validate once by hand
+```
+
+Manual full run (equivalent to what the task does):
 ```
 python main.py run
 python main.py settlement-report --call-claude --stories
 ```
+Validate once by hand before trusting the schedule; watch the Word COM render.
 
 ---
 

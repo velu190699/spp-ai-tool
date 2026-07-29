@@ -1,49 +1,61 @@
 # setup_scheduler.ps1
-# Registers (or updates) the SPP RR Automation and Report tasks in Windows Task Scheduler.
-# Run once as the user who will own the tasks. No admin required for user-level tasks.
+# Registers (or updates) the single END-TO-END SPP RR weekly task in Windows Task Scheduler.
+# Run once as the user who will own the task. No admin required for user-level tasks.
 #
-# Both tasks run weekly on the same day. The report task is offset later in the day
-# so the SharePoint-synced CUF/SUF folders have time to pick up that day's documents.
+# The task runs run_agent.bat, which chains:
+#   1. python main.py run
+#   2. (on success) python main.py settlement-report --call-claude --stories
+# i.e. the full weekly flow (RUNBOOK section 3). The old separate "report" task
+# is gone: `run` already regenerates the briefing whenever a new CUF/SUF edition
+# is published (Option B), so forcing a weekly briefing added only noise/cost.
+#
+# IMPORTANT: run this on exactly ONE machine. The tool shares State/metadata.json
+# in the synced folder and posts to a real team Slack channel; two schedulers
+# would duplicate Slack posts, double the LLM cost, and race on the ledger.
+#
+# Mode = "run only when the user is logged on" (Interactive): the settlement step
+# renders redline screenshots via Microsoft Word COM, which needs a real desktop
+# session. A locked screen is fine; a signed-off session is not.
 #
 # Usage:
-#   .\setup_scheduler.ps1                                   # Weekly on Monday: run at 09:00, report at 14:00
-#   .\setup_scheduler.ps1 -DayOfWeek Wednesday -Hour 8       # Weekly on Wednesday: run at 08:00, report at 13:00
-#   .\setup_scheduler.ps1 -ReportDelayHours 3                # Report 3 hours after run instead of 5
-#   .\setup_scheduler.ps1 -Remove                            # Delete both tasks
+#   .\setup_scheduler.ps1                                # Weekly Monday 10:00
+#   .\setup_scheduler.ps1 -DayOfWeek Wednesday -Hour 8   # Weekly Wednesday 08:00
+#   .\setup_scheduler.ps1 -Remove                        # Delete the task
 
 param(
-    [System.DayOfWeek]$DayOfWeek     = [System.DayOfWeek]::Monday,
-    [int]$Hour              = 9,
-    [int]$Minute            = 0,
-    [int]$ReportDelayHours  = 5,
+    [System.DayOfWeek]$DayOfWeek = [System.DayOfWeek]::Monday,
+    [int]$Hour   = 10,
+    [int]$Minute = 0,
     [switch]$Remove
 )
 
-$RUN_TASK_NAME    = "SPP-RR-Automation"
-$REPORT_TASK_NAME = "SPP-RR-Report"
-$PROJECT_DIR      = $PSScriptRoot
-$RUN_BAT_PATH     = Join-Path $PROJECT_DIR "run_agent.bat"
-$REPORT_BAT_PATH  = Join-Path $PROJECT_DIR "run_report.bat"
+$TASK_NAME   = "SPP-RR-Automation"
+$PROJECT_DIR = $PSScriptRoot
+$BAT_PATH    = Join-Path $PROJECT_DIR "run_agent.bat"
+$LOG_DIR     = Join-Path $PROJECT_DIR "logs"
+$LOG_PATH    = Join-Path $LOG_DIR "scheduler.log"
 
 if ($Remove) {
-    Unregister-ScheduledTask -TaskName $RUN_TASK_NAME -Confirm:$false -ErrorAction SilentlyContinue
-    Unregister-ScheduledTask -TaskName $REPORT_TASK_NAME -Confirm:$false -ErrorAction SilentlyContinue
-    Write-Host "Tasks '$RUN_TASK_NAME' and '$REPORT_TASK_NAME' removed."
+    Unregister-ScheduledTask -TaskName $TASK_NAME -Confirm:$false -ErrorAction SilentlyContinue
+    # Also remove the legacy report task if a previous version of this script created it.
+    Unregister-ScheduledTask -TaskName "SPP-RR-Report" -Confirm:$false -ErrorAction SilentlyContinue
+    Write-Host "Task '$TASK_NAME' removed (and legacy 'SPP-RR-Report' if present)."
     exit 0
 }
 
-if (-not (Test-Path $RUN_BAT_PATH)) {
-    Write-Error "run_agent.bat not found at: $RUN_BAT_PATH"
+if (-not (Test-Path $BAT_PATH)) {
+    Write-Error "run_agent.bat not found at: $BAT_PATH"
     exit 1
 }
 
-if (-not (Test-Path $REPORT_BAT_PATH)) {
-    Write-Error "run_report.bat not found at: $REPORT_BAT_PATH"
-    exit 1
+if (-not (Test-Path $LOG_DIR)) {
+    New-Item -ItemType Directory -Path $LOG_DIR | Out-Null
 }
 
-$runTime    = [datetime]::Today.AddHours($Hour).AddMinutes($Minute)
-$reportTime = $runTime.AddHours($ReportDelayHours)
+# Remove the legacy separate report task if it exists (superseded by the end-to-end job).
+Unregister-ScheduledTask -TaskName "SPP-RR-Report" -Confirm:$false -ErrorAction SilentlyContinue
+
+$runTime = [datetime]::Today.AddHours($Hour).AddMinutes($Minute)
 
 $settings = New-ScheduledTaskSettingsSet `
     -ExecutionTimeLimit  (New-TimeSpan -Hours 3) `
@@ -53,58 +65,34 @@ $settings = New-ScheduledTaskSettingsSet `
     -RunOnlyIfNetworkAvailable
 
 $principal = New-ScheduledTaskPrincipal `
-    -UserId   $env:USERNAME `
+    -UserId    $env:USERNAME `
     -LogonType Interactive `
-    -RunLevel Limited
+    -RunLevel  Limited
 
-# --- Data collection / RR crossing task ---
-$runAction = New-ScheduledTaskAction `
-    -Execute    "cmd.exe" `
-    -Argument   "/c `"$RUN_BAT_PATH`" >> `"$PROJECT_DIR\logs\scheduler.log`" 2>&1" `
+$action = New-ScheduledTaskAction `
+    -Execute          "cmd.exe" `
+    -Argument         "/c `"$BAT_PATH`" >> `"$LOG_PATH`" 2>&1" `
     -WorkingDirectory $PROJECT_DIR
 
-$runTrigger = New-ScheduledTaskTrigger `
+$trigger = New-ScheduledTaskTrigger `
     -Weekly `
     -DaysOfWeek $DayOfWeek `
     -At $runTime
 
 Register-ScheduledTask `
-    -TaskName  $RUN_TASK_NAME `
-    -Action    $runAction `
-    -Trigger   $runTrigger `
+    -TaskName  $TASK_NAME `
+    -Action    $action `
+    -Trigger   $trigger `
     -Settings  $settings `
     -Principal $principal `
     -Force | Out-Null
 
-# --- Report generation task (Slack notification fires as soon as the report is written) ---
-$reportAction = New-ScheduledTaskAction `
-    -Execute    "cmd.exe" `
-    -Argument   "/c `"$REPORT_BAT_PATH`" >> `"$PROJECT_DIR\logs\scheduler.log`" 2>&1" `
-    -WorkingDirectory $PROJECT_DIR
-
-$reportTrigger = New-ScheduledTaskTrigger `
-    -Weekly `
-    -DaysOfWeek $DayOfWeek `
-    -At $reportTime
-
-Register-ScheduledTask `
-    -TaskName  $REPORT_TASK_NAME `
-    -Action    $reportAction `
-    -Trigger   $reportTrigger `
-    -Settings  $settings `
-    -Principal $principal `
-    -Force | Out-Null
-
-Write-Host "Task '$RUN_TASK_NAME' registered successfully."
+Write-Host "Task '$TASK_NAME' registered successfully."
 Write-Host "  Schedule : Every $DayOfWeek at $($runTime.ToString('HH:mm'))"
-Write-Host "  Script   : $RUN_BAT_PATH"
+Write-Host "  Flow     : run  ->  settlement-report --call-claude --stories"
+Write-Host "  Script   : $BAT_PATH"
+Write-Host "  Log      : $LOG_PATH"
 Write-Host ""
-Write-Host "Task '$REPORT_TASK_NAME' registered successfully."
-Write-Host "  Schedule : Every $DayOfWeek at $($reportTime.ToString('HH:mm')) ($ReportDelayHours h after the run task)"
-Write-Host "  Script   : $REPORT_BAT_PATH"
-Write-Host ""
-Write-Host "  Log      : $PROJECT_DIR\logs\scheduler.log"
-Write-Host ""
-Write-Host "To verify  : Get-ScheduledTask -TaskName '$RUN_TASK_NAME','$REPORT_TASK_NAME' | Format-List"
-Write-Host "To run now : Start-ScheduledTask -TaskName '$RUN_TASK_NAME'  (or '$REPORT_TASK_NAME')"
+Write-Host "To verify  : Get-ScheduledTask -TaskName '$TASK_NAME' | Format-List"
+Write-Host "To run now : Start-ScheduledTask -TaskName '$TASK_NAME'"
 Write-Host "To remove  : .\setup_scheduler.ps1 -Remove"
