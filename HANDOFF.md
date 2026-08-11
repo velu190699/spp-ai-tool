@@ -1,8 +1,132 @@
 # SPP AI Tool — Session Handoff
 
-_Snapshot for picking this project up in a fresh chat. Updated 2026-07-22._
+_Snapshot for picking this project up in a fresh chat. Updated 2026-08-11._
 
-## Latest session — 2026-07-22 (#6 done — read this first)
+## Latest session — scheduler + FO kickoff (read this first)
+
+**Commits `e9a44c9` (2026-07-29) and `4a14708` (2026-08-03) — both PUSHED to
+origin/master. Working tree clean, 139 tests passing.** A teammate's commit
+`0612c46` was pulled in before this work (it repointed the RR Control "Story"
+column at the per-RR Jira workbook in `Stories/BO/` instead of the settlement
+summary, and dropped the "Open" stat card).
+
+### 1. Scheduler consolidated into ONE end-to-end task (`e9a44c9`)
+- `run_agent.bat` now chains `python main.py run` → on success →
+  `python main.py settlement-report --call-claude --stories` (the RUNBOOK §3
+  flow). Aborts before settlement if `run` fails (Slack alert already fires).
+- Both `.bat` wrappers activate `.venv` **only if it exists**, else system
+  Python. **This laptop has no venv** — the old scripts hard-failed on the
+  missing `activate.bat` before ever reaching `main.py`.
+- `setup_scheduler.ps1` registers a single `SPP-RR-Automation` task (weekly,
+  default **Mon 10:00**, Interactive logon) and removes the legacy
+  `SPP-RR-Report` task. `run_report.bat` stays as a manual escape hatch.
+- ⚠️ **Register on exactly ONE machine** (shared `State/metadata.json` + real
+  team Slack channel → two schedulers would duplicate posts, double LLM cost,
+  race the ledger). RUNBOOK §8 documents this.
+- **Eduardo will NOT register it** — a teammate (who has her own working `.env`)
+  will run `.\setup_scheduler.ps1` on her laptop. A ready-to-send message was
+  drafted for her; the scheduler code is pushed, so she only needs to `git pull`.
+
+### 2. Real end-to-end validated + measured (numbers are for Eduardo's PPT)
+Ran the full flow on this laptop, exit 0, Slack live (channel had no other
+members yet, so test posts were fine):
+- `run` → **~40 s**, 9 relevant RRs, and it **detected SPP re-publishing RR773's
+  Recommendation Report** → saved `.rev-20260728.docx`, flagged UPDATE.
+- Forced `settlement-report --call-claude --stories --files <RR728 docx>` →
+  **~4 m 53 s** (story + 28 screenshot pages + workbook + publish + Slack).
+  Note: passing `--files` **bypasses the ledger/watch-list block entirely**
+  (main.py:1213), which is how a steady-state RR gets reprocessed.
+- **LLM call: ~4 m 39 s · 91,171 cache-creation input + 37,828 output tokens ·
+  $1.15 · 1 turn.** Total end-to-end ~5 m 32 s.
+- ⇒ **A no-change week costs ~40 s and ~$0** (ledger skips everything);
+  **each changed RR ≈ 5 min and ≈ $1.15.** RR728 is the heaviest RR, so this is
+  a worst-case per-RR figure. The earlier "~6 min/RR" estimate was **~22% high**.
+- Method note: the CLI envelope's `usage`/`total_cost_usd` was read via a
+  TEMPORARY log line in `report_engine.py`, since **reverted** — the engine
+  discards usage metrics. Re-instrument if you need to measure again.
+
+### 3. FO (ISO Communication) pipeline kicked off — new `src/specs/` (`4a14708`)
+FO was **greenfield**; everything before this was BO + shared plumbing. Built two
+deterministic modules ($0, no LLM), driven by Miquel's real inputs (his
+2026-07-13 feedback transcript, story **SP-12813**, and the actual
+`rto_markets_api_specifications_20260708.zip`, which lives in `~/Downloads` and
+is **not committed** — 4.4 MB, so there is **no test fixture / no tests** yet):
+- **`spec_analysis.py`** — extracts the concrete changes from ONE spec release
+  zip using two independent sources: SPP's curated **"Revision History"** in
+  `IM Markets Data Exchange Guide_*.docx` (primary — plain text, far more robust
+  than the color-coded HTML) **plus** structural evidence (`Diff Reports/*.htm`
+  and new `WebServices/<Service>/` folders). **Reproduced 5/5 of Miquel's
+  SP-12813 findings**, and surfaced a 6th real change he did NOT include:
+  `MaxOfflineResponse` added to **8 Reserve operations** → ask him if in scope.
+- **`story_builder.py`** — assembles the SP-12813-shaped ISOCOM story from those
+  findings + the CUF slide's date block. **Covers 7/7 of SP-12813's
+  operations.** LLM-only prose (Use Case, impact wrapper, sample XMLs) is left as
+  explicit `[LLM LATER]` placeholders; `System Version / Effective Date` is
+  honestly marked "not in the zip".
+- Standalone, **not wired into `main.py`**:
+  `python -m src.specs.spec_analysis <zip>` /
+  `python -m src.specs.story_builder <zip> --slide "<CUF Market Releases pdf>"`
+- A demo artifact of the 3 candidate deliverables exists:
+  https://claude.ai/code/artifact/03173e1a-cb0a-4d6e-8784-41964bb62601
+
+### 4. KEY FINDING — the CUF slide is the fetch trigger, but it IS too shallow
+Verified against `(06) Market Releases - CUF July 2026.pdf` (p.2–3, "Future Web
+Service Update"), the source of the briefing's first RTO Markets item:
+- The slide **does** name the version bumps, most affected operations,
+  `Member impacting? Yes`, and — crucially — **both dates**: the misleading
+  "Draft published 5/22" *and* the true **"Final Specifications published
+  7/10/2026"**, plus Activation MTE 8/4, PROD 9/15, retirement 11/16.
+  ⇒ This **answers Miquel's two blockers** ("no link on the slide", "the slide
+  date lies"): use the slide as the TRIGGER + family name + final date, then
+  match by family on Future Tech Specs `id=21071`. No link needed.
+- But the slide **omits DemandManagement/Notify (a brand-new service)** and the
+  Reserve `MaxOfflineResponse` changes. Only the spec diff catches those.
+  ⇒ Concrete proof of Miquel's "stops one level too shallow".
+- Bonus: `DemandManagement ≈ CHILL` is corroborated inside the same CUF — the
+  `(09) CHILLS` slide mentions curtail / large load (ties to RR720 on the watch
+  list). Miquel's manual "research" is partly in the team's own materials.
+
+### FO decisions locked this session (Eduardo)
+- **Drop Miquel's separate checkbox/analysis-sheet step** — it adds a stage.
+  **Reuse the gate that already exists in BO:** stories go straight into the Jira
+  template; the PM reviews/edits and types **`Y` in `Create?`** for the app to
+  create them. One template can hold several story types as separate rows.
+- **Storage and GUI/screen stories are OUT OF SCOPE for now.** The single goal is
+  **recreating Miquel's ISOCOM story (SP-12813)**.
+- **Grain mirrors BO 1:1:** 1 **spec release** ≈ 1 RR → **1 ISOCOM story**;
+  **change items** ≈ BO's per-determinant items; service = an attribute of the
+  change item, not the unit.
+- **ISO Com impact listed BY OPERATION** — no `spp_operation_map.yaml` yet, so no
+  grouping into ISOC task names ("Download Start Stop Instructions"). Seeding
+  that map from SP-12813 was considered and deliberately **deferred**.
+- **The FO dashboard (RR-Control analog) is deferred** — decide its unit later.
+
+### Next steps for FO (in value order)
+1. **Scope-to-slide split** ($0): the story lists only operations the CUF slide
+   named (as Miquel did); other real changes (the 8 Reserve ops) go to a separate
+   "found beyond the slide — SME review" section.
+2. **Fill the real Jira template** ($0): reuse BO's `jira_template_writer` →
+   publish to synced `Stories/FO/`, `Create?` blank for the PM gate.
+3. **LLM layer** (~$1/release): Use Case + impact prose + sample XMLs from the XSDs.
+4. **Wire fetch/discovery**: parse the slide trigger in `run`, download + archive
+   each family's newest FINAL zip from `id=21071` (archive every version so there
+   is always a prior release to diff).
+
+### Carried forward from earlier sessions (still open)
+- The teammate registers the scheduled task on her laptop (`git pull` first).
+- Confirm with **Miquel**: workbooks read from `Stories/BO/`; and whether the
+  Reserve `MaxOfflineResponse` change is in scope for the ISOCOM story.
+- Retire the combined `SPP_RR_Report_Summary.xlsx` once Miquel confirms nothing
+  downstream reads it (per-RR workbooks stay).
+- `config/pci_vocabulary.yaml` (Elizabeth + Kashmita), `area_routing.yaml` review
+  (Kashmita), and the RR750 "RTO Expansion Project" initiative question.
+- Coverage caveat: only CUF/SUF editions in the **synced** folder are parsed.
+- Minor: git is committing as `Elizabeth Oyarce <eoyarce@powercosts.com>`
+  (auto-detected). Change with `git config` if the history should read otherwise.
+
+---
+
+## Earlier session — 2026-07-22 (Option B #6 done)
 
 **Everything committed and PUSHED to origin/master; 139 tests passing.** This
 session finished **Option B #6 — so Option B (#1–#6) is now COMPLETE.** The
