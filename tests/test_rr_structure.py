@@ -75,16 +75,20 @@ def test_para_marked_preserves_equation_and_redlines():
     assert "{{DEL: removed}}" in marked
 
 
-def _settlement_calc_docx(second_section_in_body: bool = True) -> bytes:
+def _settlement_calc_docx(second_section_in_body: bool = True, heading_in_body: bool = True) -> bytes:
     paragraphs = [
         f'<w:p>{_plain("RR900 Sample Settlement Test RR")}</w:p>',
         f'<w:p>{_plain("Impacted SPP Documents: Market Protocols Section: 4.5.12, (New) 4.5.19 Version 68")}</w:p>',
         f'<w:p>{_plain("☒ Market Protocols")}</w:p>',
-        f'<w:p>{_bold("MARKET PROTOCOLS")}</w:p>',
-        f'<w:p>{_plain("4.5.12 Revenue Neutrality Uplift Distribution Amount")}</w:p>',
+        # A real formula reference (the "#" determinant token) — without this,
+        # a heading alone is not proof of a calculation change (see RR653).
+        f'<w:p>{_plain("#RtSsrRevNeutralUpliftDistAmt = X + Y")}</w:p>',
     ]
-    if second_section_in_body:
-        paragraphs.append(f'<w:p>{_inserted("4.5.19 SSR Distribution Amount")}</w:p>')
+    if heading_in_body:
+        paragraphs.append(f'<w:p>{_bold("MARKET PROTOCOLS")}</w:p>')
+        paragraphs.append(f'<w:p>{_plain("4.5.12 Revenue Neutrality Uplift Distribution Amount")}</w:p>')
+        if second_section_in_body:
+            paragraphs.append(f'<w:p>{_inserted("4.5.19 SSR Distribution Amount")}</w:p>')
     return _docx_bytes(paragraphs)
 
 
@@ -108,8 +112,12 @@ def test_extract_settlement_calc_pass_when_all_listed_sections_found(tmp_path):
 
 
 def test_extract_hard_fail_when_listed_section_missing_from_body(tmp_path):
+    # Neither listed section opens a MARKET PROTOCOLS heading in the body at
+    # all (heading_in_body=False), so there's no real content to plausibly
+    # explain the mismatch as a numbering-scheme difference (see RR728's
+    # `numbering_note` leniency) — a genuine reconciliation failure.
     docx = tmp_path / "RR900.docx"
-    docx.write_bytes(_settlement_calc_docx(second_section_in_body=False))
+    docx.write_bytes(_settlement_calc_docx(heading_in_body=False))
 
     report, marked, hard_fail = extract(str(docx), DEFAULT_BANNERS)
 
@@ -117,6 +125,31 @@ def test_extract_hard_fail_when_listed_section_missing_from_body(tmp_path):
     assert report["reconciliation"]["status"] == "HARD_FAIL"
     assert "4.5.19" in report["reconciliation"]["missing_from_body"]
     assert hard_fail is True
+
+
+def _prose_only_mp_checked_docx() -> bytes:
+    # Mirrors RR653: checks the Market Protocols impacted-document box but the
+    # body never opens a MARKET PROTOCOLS banner heading, so no charge-type
+    # section is captured — a wording clarification, not a formula change.
+    paragraphs = [
+        f'<w:p>{_plain("RR653 Wording Clarification")}</w:p>',
+        f'<w:p>{_plain("Impacted SPP Documents: Market Protocols Section: 4.5.9 Version 108.2")}</w:p>',
+        f'<w:p>{_plain("☒ Market Protocols")}</w:p>',
+        f'<w:p>{_plain("This RR clarifies the wording of an existing definition; no charge-code formula is changed.")}</w:p>',
+    ]
+    return _docx_bytes(paragraphs)
+
+
+def test_extract_settlement_relevant_when_mp_checked_but_no_charge_type_heading(tmp_path):
+    docx = tmp_path / "RR653.docx"
+    docx.write_bytes(_prose_only_mp_checked_docx())
+
+    report, marked, hard_fail = extract(str(docx), DEFAULT_BANNERS)
+
+    assert report["rr_class"] == "SETTLEMENT_RELEVANT"
+    assert report["reconciliation"]["status"] == "REVIEW_SETTLEMENT_PROSE"
+    assert hard_fail is False
+    assert report["charge_type_index"] == []
 
 
 def test_extract_tariff_governance_when_no_settlement_signal(tmp_path):

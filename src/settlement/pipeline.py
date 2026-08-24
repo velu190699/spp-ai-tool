@@ -293,6 +293,7 @@ def run(
     sync_root=None,
     base_url: str = "",
     cuf_dirs=(),
+    stories_dir: str | pathlib.Path | None = None,
 ) -> tuple[str, list[dict[str, Any]]]:
     """Run the pipeline over local files and/or SharePoint links and write the xlsx.
 
@@ -321,11 +322,12 @@ def run(
     build(results, out_path)
     LOGGER.info("Wrote %s", out_path)
 
-    # Persist every LLM-generated story set as JSON next to the report — the
-    # stories must survive the run even when workbook generation is paused,
-    # both for review and so a later workbook pass can reuse them without a
-    # second (expensive) LLM call.
-    stories_dir = pathlib.Path(out_path).parent / "stories"
+    # Persist every LLM-generated story set as JSON — the stories must survive
+    # the run even when workbook generation is paused, both for review and so a
+    # later workbook pass (on ANY teammate's machine, if stories_dir is synced)
+    # can reuse them without a second (expensive) LLM call. Defaults to a local
+    # folder next to the report for callers that don't pass one explicitly.
+    stories_dir = pathlib.Path(stories_dir) if stories_dir else pathlib.Path(out_path).parent / "stories"
     for res in results:
         if res.get("stories"):
             stories_dir.mkdir(parents=True, exist_ok=True)

@@ -84,9 +84,13 @@ def build_rr_control_rows(
                 "det_count": len(determinants),
                 "changes": (changes_of(rr) if changes_of else []) or [],
                 "mp_impact": mp_impact,
-                # Out of the settlement team's scope: classified but doesn't touch
-                # Market Protocols / SUG (e.g. RR773, Tariff-only). Shown muted.
-                "out_of_scope": mp_impact is False and rr_class != "",
+                # No calculation impact: classified but not SETTLEMENT_CALC, i.e. no
+                # real "#" charge-code determinant anywhere in the RR (SETTLEMENT_RELEVANT
+                # prose-only changes like RR653, or TARIFF_GOVERNANCE like RR665/773).
+                # Ticking the Market Protocols checkbox (mp_impact) is NOT enough on its
+                # own to prove a formula changed — that's the same gap rr_structure.py's
+                # classifier had to close (see has_determinants there). Shown muted.
+                "out_of_scope": rr_class not in ("", "SETTLEMENT_CALC"),
                 "market_initiative": initiative,
                 "market_initiative_citation": w.get("market_initiative_citation", ""),
                 "initiative_hint": hint,
@@ -212,8 +216,8 @@ _TEMPLATE = """<!DOCTYPE html>
   .cls-sc{background:#e7eefa; color:var(--sc);} .cls-sr{background:#fbf0e2; color:var(--sr);}
   .cls-tg{background:#eef1f5; color:var(--tg);} .cls-un{background:#fbecec; color:var(--un);}
   .dets{display:block; font-size:11px; color:var(--muted); margin-top:3px;}
-  .scope{display:inline-block; font-size:10px; font-weight:700; padding:1px 6px; border-radius:4px;
-    background:var(--flag-bg); color:var(--flag); margin-top:4px;}
+  .scope{display:block; font-size:10px; font-weight:700; padding:1px 6px; border-radius:4px;
+    background:var(--flag-bg); color:var(--flag); margin-bottom:4px; width:fit-content;}
   tr.rr-row.oos td{background:#fcfcfd;} tr.rr-row.oos .ttl, tr.rr-row.oos .rrid{opacity:.62;}
   .detcode{display:inline-block; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
     font-size:11.5px; background:#eef2f7; color:var(--accent); border:1px solid var(--line);
@@ -281,8 +285,8 @@ _TEMPLATE = """<!DOCTYPE html>
         <td class="rrid">{% if r.rr_url %}<a href="{{ r.rr_url }}" onclick="event.stopPropagation();">RR{{ r.rr_number }}</a>{% else %}RR{{ r.rr_number }}{% endif %}{% if r.domain %}<span class="dom">{{ r.domain }}</span>{% endif %}</td>
         <td class="ttl"><span class="caret">&#9656;</span> {{ r.title }}{% if r.working_group %}<span class="wg">{{ r.working_group }}</span>{% endif %}</td>
         <td>
+          {% if r.out_of_scope %}<span class="scope" title="No # charge-code determinant found anywhere in the RR — prose/governance only, no formula changed.">No calculation impact</span>{% endif %}
           <span class="cls cls-{{ r.class_code }}" title="{{ r.class_blurb }}">{{ r.class_label }}</span>
-          {% if r.out_of_scope %}<span class="scope" title="Does not check Market Protocols / Settlement User Guide — outside the settlement team's scope.">no MP impact</span>{% endif %}
           {% if r.det_count %}<span class="dets">{{ r.det_count }} charge code{{ 's' if r.det_count != 1 }}</span>{% endif %}
         </td>
         <td><span class="pill st-{{ 'open' if r.status == 'open' else 'closed' }}">{{ r.status }}</span></td>

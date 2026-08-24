@@ -32,16 +32,24 @@ def test_rows_carry_class_initiative_status_and_history():
     assert [m["date"] for m in r["mentions"]] == ["2026-06-18", "2026-07-16"]
 
 
-def test_out_of_scope_flag_for_non_mp_rr():
-    # RR773: classified but doesn't touch Market Protocols -> out of settlement scope.
-    rows = build_rr_control_rows([_watched(rr_class="SETTLEMENT_RELEVANT", mp_impact=False)])
+def test_out_of_scope_flag_for_non_calc_rr():
+    # RR773 (SETTLEMENT_RELEVANT): classified but no real "#" determinant found ->
+    # no calculation impact, regardless of whether the Market Protocols box was
+    # ticked (RR653 ticks it too, with zero determinants — same "no calc" bucket).
+    rows = build_rr_control_rows([_watched(rr_class="SETTLEMENT_RELEVANT", mp_impact=True)])
     assert rows[0]["out_of_scope"] is True
-    # A not-yet-classified RR (mp_impact None) is NOT flagged out of scope.
+    # TARIFF_GOVERNANCE (e.g. RR665) is also flagged, whether or not MP was checked.
+    rows_tg = build_rr_control_rows([_watched(rr_class="TARIFF_GOVERNANCE", mp_impact=False)])
+    assert rows_tg[0]["out_of_scope"] is True
+    # A not-yet-classified RR is NOT flagged out of scope.
     rows2 = build_rr_control_rows([_watched(rr_class="", mp_impact=None)])
     assert rows2[0]["out_of_scope"] is False
+    # SETTLEMENT_CALC (a real determinant found) is never flagged, even if the
+    # Market Protocols checkbox reads False for some reason.
+    rows_calc = build_rr_control_rows([_watched(rr_class="SETTLEMENT_CALC", determinants=["#RtCalMtr5minQty"], mp_impact=False)])
+    assert rows_calc[0]["out_of_scope"] is False
     # Determinants render as code chips in the expanded row.
-    rows3 = build_rr_control_rows([_watched(rr_class="SETTLEMENT_CALC", determinants=["#RtCalMtr5minQty"], mp_impact=True)])
-    html = render_rr_control(rows3, {"title": "T", "generated": "x", "market": "SPPIM"})
+    html = render_rr_control(rows_calc, {"title": "T", "generated": "x", "market": "SPPIM"})
     assert "#RtCalMtr5minQty" in html and "charge code" in html
 
 

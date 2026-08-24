@@ -6,6 +6,7 @@ from src.documents.local_source import (
     latest_cuf_edition,
     latest_suf_edition,
     meeting_date_from_name,
+    publish_date_from_name,
     to_sharepoint_url,
 )
 
@@ -75,6 +76,27 @@ def test_latest_suf_edition_picks_newest_pdf(tmp_path):
     assert edition is not None
     assert "20260409" in edition.label
     assert len(edition.files) == 1
+
+
+def test_latest_cuf_edition_prefers_republish_over_older_label(tmp_path):
+    # Same meeting date (0716), republished with a later publish date (0720)
+    # under a name that sorts BEFORE the original label alphabetically ("July"
+    # < "Meeting"). Label-only tiebreaking would wrongly pick the stale one.
+    cuf_dir = tmp_path / "CUF"
+    original = cuf_dir / "CUF Meeting Materials 20260716_20260709"
+    republished = cuf_dir / "CUF July 2026 Meeting Materials 20260716_20260720"
+    for folder in (original, republished):
+        folder.mkdir(parents=True)
+        (folder / "Agenda.pdf").write_text("x", encoding="utf-8")
+
+    edition = latest_cuf_edition(cuf_dir, tmp_path, "https://x/base")
+    assert edition is not None
+    assert edition.label == "CUF July 2026 Meeting Materials 20260716_20260720"
+
+
+def test_publish_date_from_name_is_second_token():
+    assert publish_date_from_name("CUF Meeting Materials 20260716_20260709").strftime("%Y-%m-%d") == "2026-07-09"
+    assert publish_date_from_name("CUF Meeting Materials 20260618") is None
 
 
 def test_missing_dirs_return_none(tmp_path):

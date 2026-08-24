@@ -28,6 +28,7 @@ _LINK_TYPE_BY_EXT = {
 # "CUF Meeting Materials 20260618_20260612" (meeting date first, publish second)
 # "SUF Meeting Materials 20260409_20260402.pdf"
 _DATE8 = re.compile(r"(\d{8})")
+_DATE8_ALL = re.compile(r"\d{8}")
 
 
 @dataclass(frozen=True)
@@ -57,6 +58,24 @@ def meeting_date_from_name(name: str) -> datetime | None:
         return None
     try:
         return datetime.strptime(match.group(1), "%Y%m%d")
+    except ValueError:
+        return None
+
+
+def publish_date_from_name(name: str) -> datetime | None:
+    """The publish date is the second YYYYMMDD token, if any.
+
+    SPP sometimes republishes materials for the same meeting under a new
+    filename (same meeting date, later publish date) -- e.g. "CUF Meeting
+    Materials 20260716_20260709" superseded by "CUF July 2026 Meeting
+    Materials 20260716_20260720". Both share meeting_date 07-16, so sorting
+    on meeting_date + label text is not enough to find the newest one.
+    """
+    matches = _DATE8_ALL.findall(name)
+    if len(matches) < 2:
+        return None
+    try:
+        return datetime.strptime(matches[1], "%Y%m%d")
     except ValueError:
         return None
 
@@ -117,13 +136,21 @@ def _suf_edition(pdf: Path, sync_root: Path, base_url: str) -> SourceEdition:
     )
 
 
+def _edition_sort_key(edition: SourceEdition) -> tuple[datetime, datetime, str]:
+    return (
+        edition.meeting_date or datetime.min,
+        publish_date_from_name(edition.label) or datetime.min,
+        edition.label,
+    )
+
+
 def all_cuf_editions(cuf_dir: Path, sync_root: Path, base_url: str) -> list[SourceEdition]:
     """Every CUF meeting subfolder as an edition, sorted oldest -> newest."""
     if not cuf_dir.exists():
         LOGGER.warning("CUF directory does not exist: %s", cuf_dir)
         return []
     editions = [_cuf_edition(p, sync_root, base_url) for p in cuf_dir.iterdir() if p.is_dir()]
-    return sorted(editions, key=lambda e: (e.meeting_date or datetime.min, e.label))
+    return sorted(editions, key=_edition_sort_key)
 
 
 def all_suf_editions(suf_dir: Path, sync_root: Path, base_url: str) -> list[SourceEdition]:
@@ -132,7 +159,7 @@ def all_suf_editions(suf_dir: Path, sync_root: Path, base_url: str) -> list[Sour
         LOGGER.warning("SUF directory does not exist: %s", suf_dir)
         return []
     editions = [_suf_edition(p, sync_root, base_url) for p in suf_dir.glob("*.pdf") if p.is_file()]
-    return sorted(editions, key=lambda e: (e.meeting_date or datetime.min, e.label))
+    return sorted(editions, key=_edition_sort_key)
 
 
 def latest_cuf_edition(cuf_dir: Path, sync_root: Path, base_url: str) -> SourceEdition | None:

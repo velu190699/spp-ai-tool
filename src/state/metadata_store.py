@@ -238,6 +238,22 @@ class MetadataStore:
         watched["last_seen"] = datetime.now(timezone.utc).isoformat()
         return watched
 
+    # ------------------------------------------------------------------
+    # Briefing (Market Changes Summary) build ledger. Tracks whether the HTML
+    # report has been SUCCESSFULLY built for a given (latest CUF, latest SUF)
+    # edition pair -- independent of whether SPP re-served identical source
+    # bytes (the run's cuf_is_new/suf_is_new hash check). A failed build
+    # leaves the key unset, so the next run retries instead of silently giving
+    # up forever once the source hash is already recorded in ``documents``.
+    # ------------------------------------------------------------------
+
+    def is_briefing_built(self, edition_key: str) -> bool:
+        return edition_key in self.data.get("briefings_built", {})
+
+    def mark_briefing_built(self, edition_key: str, meta: dict[str, Any] | None = None) -> None:
+        now = datetime.now(timezone.utc).isoformat()
+        self.data.setdefault("briefings_built", {})[edition_key] = {**(meta or {}), "built_at": now}
+
     def save_mentions(self, family: str, mentions: dict[str, Any]) -> None:
         self.data.setdefault("mentions_cache", {})[family] = mentions
 

@@ -56,7 +56,18 @@ def discover_claude_binary(home: Path | None = None) -> Path | None:
 
 
 def _extract_json(text: str) -> dict:
-    """Pull a JSON object out of model output, tolerating markdown fences."""
+    """Pull a JSON object out of model output, tolerating markdown fences.
+
+    A longer response (e.g. a large RR's story extraction) sometimes has the
+    model narrate an example or partial aside — its own small `{...}` fragment
+    — before the real, complete answer, or the real answer never lands because
+    the response got cut off after that aside. Taking just the FIRST top-level
+    object then silently returns that fragment as if it were the whole report
+    (RR728: a lone `{"n": 15, "action": ..., "determinant": ...}` item, not the
+    full story). So every top-level object in the text is decoded and the one
+    with the most keys wins — the real answer is virtually always far larger
+    than an incidental aside, regardless of which side of it the aside sits.
+    """
     stripped = text.strip()
     # Strip a leading ```json / ``` fence if present.
     fence = re.match(r"^```(?:json)?\s*(.*?)\s*```$", stripped, re.DOTALL)
@@ -66,14 +77,25 @@ def _extract_json(text: str) -> dict:
         return json.loads(stripped)
     except json.JSONDecodeError:
         pass
-    # Fall back to the first balanced {...} span.
-    start = stripped.find("{")
-    end = stripped.rfind("}")
-    if start != -1 and end > start:
+    decoder = json.JSONDecoder()
+    candidates: list[dict] = []
+    pos = 0
+    while True:
+        start = stripped.find("{", pos)
+        if start == -1:
+            break
         try:
-            return json.loads(stripped[start : end + 1])
-        except json.JSONDecodeError as exc:
-            raise EngineError(f"Engine returned non-JSON output: {exc}") from exc
+            obj, end = decoder.raw_decode(stripped, start)
+            candidates.append(obj)
+            pos = end
+        except json.JSONDecodeError:
+            pos = start + 1
+    if candidates:
+        # reversed() so a tie in key count favors the LATER candidate — the
+        # real answer, on the rare tie, is more likely to be the one after any
+        # preamble than before it.
+        return max(reversed(candidates), key=lambda o: len(o) if isinstance(o, dict) else 0)
+    LOGGER.error("Engine output contained no JSON object; raw response follows:\n%s", text)
     raise EngineError("Engine output contained no JSON object")
 
 

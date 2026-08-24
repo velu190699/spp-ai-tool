@@ -113,6 +113,20 @@ def test_parsed_editions_registry_tracks_once(tmp_path):
     assert MetadataStore(tmp_path / "m.json").is_edition_parsed("CUF|July")
 
 
+def test_briefing_ledger_tracks_success_only(tmp_path):
+    store = MetadataStore(tmp_path / "m.json")
+    key = "CUF|August::SUF|July"
+    assert not store.is_briefing_built(key)
+    store.mark_briefing_built(key, {"run_id": "20260817-170509"})
+    assert store.is_briefing_built(key)
+    # A different edition pair (e.g. next month's CUF) is tracked independently.
+    assert not store.is_briefing_built("CUF|September::SUF|July")
+    # Survives save/reload, so a build failure this run is retried next time
+    # even though the source document's hash was already recorded.
+    store.save()
+    assert MetadataStore(tmp_path / "m.json").is_briefing_built(key)
+
+
 def test_add_watched_mention_recovers_initiative_from_older_edition(tmp_path):
     store = MetadataStore(tmp_path / "m.json")
     # RR750 is watched but its latest-edition initiative came up blank.

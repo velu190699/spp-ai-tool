@@ -258,8 +258,12 @@ def stories_from_results(results: list[dict[str, Any]]) -> list[StoryRow]:
     LLM-generated stories (SETTLEMENT_CALC + PASS with --call-claude) carry
     their own description/AC; without the LLM a deterministic draft row is
     emitted so the PM still sees the change, marked as needing the full pass.
-    SETTLEMENT_CALC + HARD_FAIL and SETTLEMENT_RELEVANT become single review
-    Tasks; TARIFF_GOVERNANCE is out of scope and emits nothing.
+    SETTLEMENT_CALC + HARD_FAIL becomes a single manual-review Task (a real
+    formula change exists but extraction couldn't be trusted). SETTLEMENT_RELEVANT
+    and TARIFF_GOVERNANCE are both out of scope for a Jira story workbook — neither
+    touches a charge-code formula — and emit nothing here; SETTLEMENT_RELEVANT
+    still gets its own row in the SPP_RR_Report_Summary "RR Summary" triage sheet
+    (settlement_report.py) so it stays visible, just without a per-RR PM workbook.
     """
     story_rows: list[StoryRow] = []
     for res in results:
@@ -315,17 +319,9 @@ def stories_from_results(results: list[dict[str, Any]]) -> list[StoryRow]:
                 ),
                 acceptance_criteria=_format_ac(["RR reviewed by settlements SME and stories authored manually"]),
             ))
-        elif cls == "SETTLEMENT_RELEVANT":
-            story_rows.append(StoryRow(
-                issue_type="Task",
-                summary=_prefixed(f"{rr} — review settlement impact (prose change, no charge-code redlines)"),
-                description=(
-                    f"{rr} changes settlement-relevant Tariff/Protocol prose without charge-code "
-                    "redlines. Review whether PCI settlement logic or documentation is affected."
-                    f"{_footer_for('')}"
-                ),
-                acceptance_criteria=_format_ac(["Impact assessed and documented; follow-up stories created if needed"]),
-            ))
-        # TARIFF_GOVERNANCE: informational only — no story (Kashmita's scope rule).
+        # SETTLEMENT_RELEVANT and TARIFF_GOVERNANCE: no charge-code formula change,
+        # so no Jira story workbook — informational only (Kashmita's scope rule).
+        # SETTLEMENT_RELEVANT still gets a triage row in the RR Summary sheet
+        # (settlement_report.py), just not a per-RR PM workbook here.
 
     return story_rows

@@ -26,6 +26,7 @@ from src.documents.local_source import (
     all_suf_editions,
     latest_cuf_edition,
     latest_suf_edition,
+    meeting_date_from_name,
     to_sharepoint_url,
 )
 from src.documents.pdf_parser import parse_pdf
@@ -36,6 +37,7 @@ from src.notifications.notifier import (
     send_slack_briefing_by_area,
     send_slack_failure,
     send_slack_heartbeat,
+    send_slack_report_link,
     send_slack_rr_control,
     send_slack_story_drafts,
 )
@@ -99,6 +101,7 @@ def get_or_download(
     dry_run: bool,
     warnings: list[str],
     redownload_on_hash_change: bool = False,
+    transient_local_copy: bool = False,
 ) -> tuple[Path | None, bool]:
     existing = state.check_document(document.document_id, document.filename)
     cached_path = state.latest_local_path(document.document_id, document.filename)
@@ -116,9 +119,16 @@ def get_or_download(
         new_hash = sha256_file(temp_path)
         old_hash = existing.existing.get("sha256") if existing.existing else None
         if old_hash and new_hash == old_hash:
-            temp_path.unlink()  # same content, discard
             LOGGER.info("%s content unchanged (hash match): %s", family, document.filename)
-            return cached_path, False
+            # client.download() uses a deterministic (date-based) filename, so
+            # temp_path and cached_path are normally the SAME file on disk —
+            # unlinking it here would delete the file we're about to return.
+            # Only discard temp_path when it's a genuinely separate duplicate
+            # AND the old cached_path is still there to fall back on.
+            if temp_path != cached_path and cached_path.exists():
+                temp_path.unlink()
+                return cached_path, False
+            return temp_path, False
         # Content changed — keep new file, record as updated
         LOGGER.info("%s content changed (new hash): %s", family, document.filename)
         state.record_document(
@@ -148,6 +158,16 @@ def get_or_download(
     content_changed = existing.is_new or (old_hash is not None and old_hash != file_hash)
     if not existing.is_new and content_changed:
         LOGGER.info("%s content changed since last run (re-published): %s", family, document.filename)
+    if transient_local_copy and not content_changed:
+        # Landed here because the cached copy was gone (CUF/Protocol zips are
+        # deleted right after extraction) -- this download only existed to
+        # verify the hash. Content is confirmed unchanged, so it's redundant;
+        # keeping it would leave a stray zip next to the already-extracted
+        # folder forever (nothing ever revisits this key to clean it up once
+        # the next edition supersedes it as "latest").
+        LOGGER.info("%s content unchanged (re-verified, no persistent copy kept): %s", family, document.filename)
+        local_path.unlink()
+        return None, False
     state.record_document(
         document.document_id,
         document.filename,
@@ -162,10 +182,46 @@ def get_or_download(
     return local_path, content_changed
 
 
+def _briefing_edition_key(config) -> str:
+    """Key identifying the (latest CUF, latest SUF) edition pair a briefing summarizes.
+
+    Distinct from the run's cuf_is_new/suf_is_new hash check: that flag only says
+    SPP served new bytes today, not that a report was ever successfully built
+    from them. Gating on this key instead means a build failure (LLM error,
+    malformed output) gets retried on the next run rather than being silently
+    skipped forever once the source hash is already recorded.
+    """
+    cuf = latest_cuf_edition(config.cuf_dir, config.sharepoint_sync_root, config.sharepoint_base_url)
+    suf = latest_suf_edition(config.suf_dir, config.sharepoint_sync_root, config.sharepoint_base_url)
+    cuf_part = f"CUF|{cuf.label}" if cuf else "CUF|none"
+    suf_part = f"SUF|{suf.label}" if suf else "SUF|none"
+    return f"{cuf_part}::{suf_part}"
+
+
 def require_document(name: str, document: SppDocument | None) -> SppDocument:
     if not document:
         raise RuntimeError(f"Required SPP document not found: {name}")
     return document
+
+
+def _remove_superseded_editions(edition_dir: Path, keep_folder: Path) -> list[str]:
+    """Delete sibling folders for the same meeting date as ``keep_folder``.
+
+    SPP sometimes republishes a meeting's materials under a new filename
+    (same meeting date, later publish date) -- the old folder would
+    otherwise stick around forever as a stale duplicate.
+    """
+    meeting_date = meeting_date_from_name(keep_folder.name)
+    if meeting_date is None:
+        return []
+    removed = []
+    for sibling in edition_dir.iterdir():
+        if not sibling.is_dir() or sibling == keep_folder:
+            continue
+        if meeting_date_from_name(sibling.name) == meeting_date:
+            shutil.rmtree(sibling)
+            removed.append(sibling.name)
+    return removed
 
 
 def process_pdf_family(
@@ -517,14 +573,16 @@ def _norm_det(name: str) -> str:
 def _rr_charge_changes_resolver(config):
     """Map an RR number to its generated story's per-determinant formula changes.
 
-    Reuses the newest persisted story JSON (no LLM, no re-render). Each row is one
+    Reuses the newest persisted story JSON (no LLM, no re-render) from the SYNCED
+    settlement_stories_dir — so a story generated on any teammate's machine shows
+    up here, not just the machine that ran the LLM call. Each row is one
     charge-code determinant with its ``formula_before`` / ``formula_after`` (from
     ``charge_codes``) and the MARKUP-view page for that determinant (joined from
     ``jira_stories[0].items`` by determinant name, so pages match the Excel and
     never mix markup/content numbering). Returns ``[]`` for an RR with no story
     yet; the dashboard then falls back to the bare determinant codes.
     """
-    stories_dir = config.settlement_reports_dir / "stories"
+    stories_dir = config.settlement_stories_dir
 
     def resolve(rr: str) -> list[dict[str, Any]]:
         matches = sorted(stories_dir.glob(f"RR{rr}-*.json")) if stories_dir.exists() else []
@@ -688,6 +746,7 @@ def run(dry_run: bool) -> int:
         downloads_dir=config.cuf_dir,
         dry_run=dry_run,
         warnings=warnings,
+        transient_local_copy=True,
     )
     suf_path, suf_is_new = get_or_download(
         family="suf",
@@ -710,6 +769,7 @@ def run(dry_run: bool) -> int:
             downloads_dir=config.protocols_dir,
             dry_run=dry_run,
             warnings=warnings,
+            transient_local_copy=True,
         )
         if protocol_path and protocol_path.exists():
             from src.documents.zip_utils import extract_matching
@@ -731,6 +791,9 @@ def run(dry_run: bool) -> int:
             cuf_folder = config.cuf_dir / cuf_path.stem
             cuf_pdfs = extract_pdfs(cuf_path, cuf_folder)
             cuf_path.unlink()  # delete the zip after extracting
+            removed = _remove_superseded_editions(config.cuf_dir, cuf_folder)
+            for name in removed:
+                LOGGER.info("Removed superseded CUF edition: %s", name)
             family_outputs["cuf"] = process_pdf_family(
                 family="cuf", files=cuf_pdfs, warnings=warnings, dry_run=dry_run
             )
@@ -866,10 +929,13 @@ def run(dry_run: bool) -> int:
         # Distinct, well-crafted Slack per situation (Option B #6): a by-area
         # briefing on a new CUF/SUF edition, an RR Control delta on any RR-level
         # change, and a heartbeat when nothing changed so silence is never
-        # ambiguous.
+        # ambiguous. The briefing also retries if it's never been built for the
+        # CURRENT latest CUF/SUF, even when neither's hash changed today (i.e. a
+        # prior build attempt failed and was never recorded as successful).
+        need_briefing = bool(cuf_is_new or suf_is_new) or not state.is_briefing_built(_briefing_edition_key(config))
         _notify_run(
             config, warnings, run_id, relevant_rrs, state,
-            new_edition=bool(cuf_is_new or suf_is_new),
+            new_edition=need_briefing,
             newly_added=newly_added, updated_nums=updated_nums,
             newly_closed=newly_closed, control_url=control_url,
         )
@@ -1084,7 +1150,7 @@ def _notify_run(
 
     # 1. A new CUF/SUF edition -> the all-teams by-area briefing.
     if new_edition:
-        notify_slack_report(config, warnings, run_id, relevant_rrs, control_url=control_url)
+        notify_slack_report(config, warnings, run_id, relevant_rrs, state, control_url=control_url)
 
     # 2. Any RR-level change -> the RR Control register with the "what changed" delta.
     changes = _rr_control_changes(state, newly_added, updated_nums, newly_closed)
@@ -1101,12 +1167,16 @@ def _notify_run(
 
 
 def notify_slack_report(config, warnings: list[str], run_id: str,
-                        relevant_rrs: list[dict[str, Any]], control_url: str = "") -> None:
+                        relevant_rrs: list[dict[str, Any]], state: MetadataStore,
+                        control_url: str = "") -> None:
     """Build+publish the HTML report and post the by-area briefing to Slack.
 
     Report generation must never sink the surrounding command, so a build
     failure is logged and turned into a warning; the channel is still notified
     (a plain status line, no link) so a failed report doesn't go unnoticed.
+    Success is recorded in the briefing ledger (keyed by the current latest
+    CUF/SUF editions) so a failure here gets retried on the next run instead of
+    being silently skipped forever.
     """
     report_url = ""
     report = None
@@ -1122,6 +1192,7 @@ def notify_slack_report(config, warnings: list[str], run_id: str,
         note = "Report generation failed; see the run log for details."
     date_label = datetime.now().strftime("%B %d, %Y")
     if report is not None:
+        state.mark_briefing_built(_briefing_edition_key(config))
         areas, sources_line = _briefing_areas(report)
         send_slack_briefing_by_area(
             date_label, areas,
@@ -1159,6 +1230,8 @@ def generate_report() -> int:
     html_path, report_url, report = build_market_changes_html(config, warnings, run_id, relevant_rrs)
     if html_path is None:
         raise RuntimeError("No CUF or SUF materials found in the synced SharePoint folders")
+    state.mark_briefing_built(_briefing_edition_key(config))
+    state.save()
 
     # Announce the published report in Slack as the by-area briefing.
     date_label = datetime.now().strftime("%B %d, %Y")
@@ -1283,12 +1356,14 @@ def generate_settlement_report(
         sync_root=config.sharepoint_sync_root,
         base_url=config.sharepoint_base_url,
         cuf_dirs=(config.cuf_dir, config.suf_dir),
+        stories_dir=config.settlement_stories_dir,
     )
     LOGGER.info("Settlement report written: %s", out_path)
 
-    # Publish the finished xlsx to the synced SharePoint folder (the working
-    # artifacts — stories JSON, images, rendered PDFs — stay in the local
-    # settlement_reports_dir; the team only sees the report itself).
+    # Publish the finished xlsx to the synced SharePoint folder. The story JSON
+    # already went to the synced settlement_stories_dir above (so any teammate's
+    # RR Control dashboard can reuse it); images/rendered-PDF/screenshot working
+    # artifacts stay in the local settlement_reports_dir — no one else needs those.
     published_path = out_path
     if config.published_settlement_reports_dir.resolve() != Path(out_path).parent.resolve():
         published_path = str(config.published_settlement_reports_dir / Path(out_path).name)

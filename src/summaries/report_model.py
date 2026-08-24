@@ -160,9 +160,20 @@ class ReportData:
             raise
         except Exception as exc:  # noqa: BLE001 - surface a clear contract error
             raise ReportValidationError(f"Malformed 'areas': {exc}") from exc
+        narrative = [NarrativeSection.from_dict(n) for n in raw.get("narrative", [])]
+        if not narrative and not any(area.items for area in areas):
+            # A schema-valid but content-free response (the engine returned all
+            # empty arrays) is a failure, not a "quiet cycle" — a real CUF/SUF
+            # edition always has SOMETHING (at minimum agenda/action items).
+            # Treating this as invalid lets the caller retry instead of silently
+            # publishing a blank report and posting "no notable changes" to Slack.
+            raise ReportValidationError(
+                "Report has no narrative sections and no area items — "
+                "refusing to treat an empty engine response as a valid report"
+            )
         return cls(
             meta=ReportMeta.from_dict(raw.get("meta", {})),
             areas=areas,
             timeline=[TimelineEntry.from_dict(t) for t in raw.get("timeline", [])],
-            narrative=[NarrativeSection.from_dict(n) for n in raw.get("narrative", [])],
+            narrative=narrative,
         )

@@ -18,6 +18,30 @@ def test_extract_json_finds_embedded_object():
     assert _extract_json('Here you go:\n{"a": 1}\nThanks') == {"a": 1}
 
 
+def test_extract_json_ignores_trailing_content_with_brace():
+    # Regression: trailing prose containing its own "}" used to make the old
+    # rfind("}")-based span cut past the real object and raise "Extra data".
+    text = '{"a": 1}\n\nLet me know if you need anything else {no further changes}.'
+    assert _extract_json(text) == {"a": 1}
+
+
+def test_extract_json_prefers_the_larger_object_over_an_earlier_fragment():
+    # Regression (RR728): a long extraction let the model narrate one item as
+    # an aside — {"n": 15, "action": "...", "determinant": "..."} — before the
+    # real, complete report. Taking just the FIRST top-level object used to
+    # return that small aside instead of the real answer.
+    text = (
+        'Let me look at item 15: {"n": 15, "action": "Update", "determinant": "X"}\n\n'
+        'Here is the full report:\n'
+        '{"rr_id": "RR728", "rr_title": "t", "sharepoint_url": null, "extraction_quality": "OK", '
+        '"warnings": [], "impacted_sections_checklist": [], "charge_codes": [], '
+        '"checklist_reconciliation": {}, "jira_stories": [{"summary": "s"}], "prompt_version": "1"}'
+    )
+    result = _extract_json(text)
+    assert result["rr_id"] == "RR728"
+    assert result["jira_stories"] == [{"summary": "s"}]
+
+
 def test_build_engine_stub():
     engine = build_engine("stub")
     assert isinstance(engine, StubEngine)
@@ -31,6 +55,20 @@ def test_build_engine_unknown():
 def test_report_model_rejects_unknown_area():
     with pytest.raises(ReportValidationError):
         ReportData.from_dict({"areas": [{"key": "not_a_real_area"}]})
+
+
+def test_report_model_rejects_all_empty_content():
+    # Regression: a schema-valid response with every content array empty (the
+    # engine glitched and produced nothing) used to pass validation and get
+    # published/posted to Slack as a "no notable changes" report.
+    with pytest.raises(ReportValidationError):
+        ReportData.from_dict({"meta": {}, "areas": [], "timeline": [], "narrative": []})
+
+
+def test_report_model_accepts_content_via_narrative_only():
+    # Narrative-only content (no area items) is still a real report.
+    report = ReportData.from_dict({"narrative": [{"heading": "H", "paragraphs": ["p"]}]})
+    assert report.narrative[0].heading == "H"
 
 
 def test_report_model_fills_all_areas_from_stub():

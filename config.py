@@ -39,6 +39,7 @@ class AppConfig:
     published_control_dir: Path
     settlement_reports_dir: Path
     published_settlement_reports_dir: Path
+    settlement_stories_dir: Path
     jira_template_file: Path
     jira_stories_dir: Path
     logs_dir: Path
@@ -109,6 +110,13 @@ def load_config(path: str = "config.yaml") -> AppConfig:
         published_control_dir=reports_root / "Control",
         settlement_reports_dir=_expand_path(paths.get("settlement_reports_dir", "data/reports/settlement")),
         published_settlement_reports_dir=reports_root / "Summaries" / "BO",
+        # The LLM-generated story JSON, specifically (NOT the images/rendered-PDF/
+        # screenshot working artifacts, which stay local — see settlement_reports_dir).
+        # Synced so a story generated on one teammate's machine is visible to
+        # everyone's RR Control dashboard, not just the machine that ran the LLM
+        # call (Lucia, 2026-08-24 — RR728 got re-run and burned real API cost
+        # because its story existed on Elizabeth's machine but not this one).
+        settlement_stories_dir=base / "State" / "Settlement_Stories",
         jira_template_file=_expand_path(paths.get("jira_template_file", "templates/Jira_Story_Creator_template.xlsx")),
         jira_stories_dir=base / "Stories" / "BO",
         logs_dir=_expand_path(paths.get("logs_dir", "logs")),
@@ -148,6 +156,7 @@ def ensure_runtime_dirs(config: AppConfig) -> None:
         config.published_control_dir,
         config.settlement_reports_dir,
         config.published_settlement_reports_dir,
+        config.settlement_stories_dir,
         config.jira_stories_dir,
         config.logs_dir,
     ):

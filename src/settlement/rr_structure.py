@@ -293,6 +293,17 @@ def extract(docx_path, banners, sharepoint_url=None, cuf_suf_refs=None):
 
     mp_checked = "Market Protocols" in checked_boxes
     has_determinants = len(determinants) > 0
+    # has_determinants (a real "#" charge-code token somewhere in the RR) is the
+    # only reliable proof of an actual formula/calculation change. Neither the
+    # "Market Protocols" impacted-document checkbox nor a numbered charge-type
+    # heading in the body is sufficient on its own: an RR can tick that box, or
+    # even have real MP section headings in its body (RR653: Offer Submittal,
+    # Bid Submittal, ...), while only rewording prose with zero "#" tokens
+    # anywhere in the document. Treating either as proof of a formula change
+    # routed those RRs into SETTLEMENT_CALC, where reconciliation then
+    # hard-fails (no determinant-bearing section survives filtering) and
+    # produces a misleading "charge-code extraction failed" manual-review
+    # story instead of the correct "prose change, no calc impact" review one.
 
     # Is the RR *about* settlement behavior even without a # determinant?
     # Judge from the HEADER (title + essential points), where the RR states its
@@ -306,10 +317,10 @@ def extract(docx_path, banners, sharepoint_url=None, cuf_suf_refs=None):
     core_hits = sum(header.count(term) for term in CORE_TERMS)
     touches_ae = "attachment ae" in all_text.lower()
 
-    if has_determinants or mp_checked:
+    if has_determinants:
         rr_class = "SETTLEMENT_CALC"          # formulas/determinants to extract
-    elif core_hits >= 2 and touches_ae:
-        rr_class = "SETTLEMENT_RELEVANT"      # settlement impact via Tariff prose (review!)
+    elif mp_checked or (core_hits >= 2 and touches_ae):
+        rr_class = "SETTLEMENT_RELEVANT"      # settlement impact via prose, no calc change (review!)
     else:
         rr_class = "TARIFF_GOVERNANCE"        # definitions / rate schedules / prose only
 

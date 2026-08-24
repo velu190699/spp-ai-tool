@@ -65,7 +65,9 @@ def test_review_tasks_and_out_of_scope():
         _result("RR665", "TARIFF_GOVERNANCE", "NO_CHARGE_CODES"),
     ])
     assert sum(1 for r in rows if "RR720" in r.summary and r.issue_type == "Task") == 1
-    assert sum(1 for r in rows if "RR773" in r.summary and r.issue_type == "Task") == 1
+    # SETTLEMENT_RELEVANT (prose change, no formula) gets no Jira workbook row —
+    # it's still visible in the RR Summary triage sheet, just not a PM workbook.
+    assert not any("RR773" in r.summary for r in rows)
     assert not any("RR665" in r.summary for r in rows)  # TARIFF_GOVERNANCE emits nothing
 
 
