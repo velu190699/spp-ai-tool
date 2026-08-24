@@ -9,10 +9,12 @@ data/downloads/*
 data/extracted/*
 data/state/*
 data/reports/*
+data/specs_archive/*
 logs/*
 
 !data/downloads/.gitkeep
 !data/extracted/.gitkeep
 !data/state/.gitkeep
 !data/reports/.gitkeep
+!data/specs_archive/.gitkeep
 !logs/.gitkeep

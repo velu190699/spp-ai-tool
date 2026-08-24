@@ -130,6 +130,20 @@ class SppClient:
                 documents.append(doc)
         return documents
 
+    def list_page_documents(self, page_id: int | str) -> list[SppDocument]:
+        """Every document listed on a documents-filings PAGE (``?id=<page_id>``).
+
+        The RR flows search by name; the FO spec flow instead watches one whole
+        curated page (Future Tech Specs, id=21071) because the CUF slide gives
+        no link — see src/specs/spec_fetcher.py.
+        """
+        url = f"{self.base_url}{DOCUMENT_SEARCH_PATH}?id={page_id}"
+        LOGGER.info("Listing SPP documents page: %s", url)
+        response = self.session.get(url, timeout=self.timeout)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, "html.parser")
+        return [doc for doc in (_document_from_anchor(a) for a in soup.find_all("a", href=True)) if doc]
+
     def search_site_documents(self, query: str) -> list[SppDocument]:
         url = f"{self.base_url}/search/?q={quote_plus(query)}&t=Documents"
         LOGGER.info("Searching SPP site documents: %s", query)
