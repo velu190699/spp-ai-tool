@@ -27,7 +27,7 @@ _CLASS_META = {
                             "Affects settlement through prose/Tariff wording, not a numbered formula — gets a review task, not a full story."),
     "TARIFF_GOVERNANCE": ("Tariff / governance", "tg",
                           "Definitions, rates, or governance prose only — no charge-code impact, no story."),
-    "": ("Unclassified", "un", "Not yet classified — no Recommendation Report has been parsed for this RR."),
+    "": ("No recommendation report", "un", "Not yet classified — no Recommendation Report has been parsed for this RR."),
 }
 
 
@@ -89,8 +89,16 @@ def build_rr_control_rows(
                 # prose-only changes like RR653, or TARIFF_GOVERNANCE like RR665/773).
                 # Ticking the Market Protocols checkbox (mp_impact) is NOT enough on its
                 # own to prove a formula changed — that's the same gap rr_structure.py's
-                # classifier had to close (see has_determinants there). Shown muted.
+                # classifier had to close (see has_determinants there). Drives the
+                # "No calculation impact" badge — excludes "" (unclassified) since we
+                # don't yet know its impact, we just haven't parsed an RR for it.
                 "out_of_scope": rr_class not in ("", "SETTLEMENT_CALC"),
+                # Muted row styling: anything short of a confirmed calc impact,
+                # including unclassified ("" — e.g. RR688, no Recommendation Report
+                # parsed yet). Broader than out_of_scope on purpose — dims the row
+                # without claiming "no calc impact" for a row we simply know nothing
+                # about yet.
+                "muted": rr_class != "SETTLEMENT_CALC",
                 "market_initiative": initiative,
                 "market_initiative_citation": w.get("market_initiative_citation", ""),
                 "initiative_hint": hint,
@@ -281,8 +289,8 @@ _TEMPLATE = """<!DOCTYPE html>
     </thead>
     <tbody>
       {% for r in rows %}
-      <tr class="rr-row{{ ' oos' if r.out_of_scope }}" data-rr="{{ r.rr_number }}">
-        <td class="rrid">{% if r.rr_url %}<a href="{{ r.rr_url }}" onclick="event.stopPropagation();">RR{{ r.rr_number }}</a>{% else %}RR{{ r.rr_number }}{% endif %}{% if r.domain %}<span class="dom">{{ r.domain }}</span>{% endif %}</td>
+      <tr class="rr-row{{ ' oos' if r.muted }}" data-rr="{{ r.rr_number }}">
+        <td class="rrid">{% if r.rr_url %}<a href="{{ r.rr_url }}" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation();">RR{{ r.rr_number }}</a>{% else %}RR{{ r.rr_number }}{% endif %}{% if r.domain %}<span class="dom">{{ r.domain }}</span>{% endif %}</td>
         <td class="ttl"><span class="caret">&#9656;</span> {{ r.title }}{% if r.working_group %}<span class="wg">{{ r.working_group }}</span>{% endif %}</td>
         <td>
           {% if r.out_of_scope %}<span class="scope" title="No # charge-code determinant found anywhere in the RR — prose/governance only, no formula changed.">No calculation impact</span>{% endif %}
@@ -297,7 +305,7 @@ _TEMPLATE = """<!DOCTYPE html>
             {% if r.initiative_hint %}<span class="cite">nearby: {{ r.initiative_hint }} (hint, not confirmed)</span>{% endif %}
           {% endif %}
         </td>
-        <td>{% if r.story_url %}<a href="{{ r.story_url }}">open</a>{% else %}<span class="blank">&mdash;</span>{% endif %}</td>
+        <td>{% if r.story_url %}<a href="{{ r.story_url }}" target="_blank" rel="noopener noreferrer">open</a>{% elif r.out_of_scope %}<span class="blank">Not applicable</span>{% else %}<span class="blank">&mdash;</span>{% endif %}</td>
         <td style="white-space:nowrap; color:var(--muted); font-variant-numeric:tabular-nums;">{{ r.last_updated }}</td>
       </tr>
       <tr class="exp" data-exp="{{ r.rr_number }}">

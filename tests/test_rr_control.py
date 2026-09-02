@@ -41,24 +41,45 @@ def test_out_of_scope_flag_for_non_calc_rr():
     # TARIFF_GOVERNANCE (e.g. RR665) is also flagged, whether or not MP was checked.
     rows_tg = build_rr_control_rows([_watched(rr_class="TARIFF_GOVERNANCE", mp_impact=False)])
     assert rows_tg[0]["out_of_scope"] is True
-    # A not-yet-classified RR is NOT flagged out of scope.
+    # A not-yet-classified RR (e.g. RR688, no Recommendation Report parsed yet)
+    # is NOT flagged out_of_scope (no "No calculation impact" badge — we don't
+    # yet know its impact), but IS muted (dimmed row) since it's not a
+    # confirmed calc-impact RR either.
     rows2 = build_rr_control_rows([_watched(rr_class="", mp_impact=None)])
     assert rows2[0]["out_of_scope"] is False
-    # SETTLEMENT_CALC (a real determinant found) is never flagged, even if the
-    # Market Protocols checkbox reads False for some reason.
+    assert rows2[0]["muted"] is True
+    # muted covers every non-SETTLEMENT_CALC bucket, including out_of_scope ones.
+    assert rows[0]["muted"] is True
+    assert rows_tg[0]["muted"] is True
+    # SETTLEMENT_CALC (a real determinant found) is never flagged or muted,
+    # even if the Market Protocols checkbox reads False for some reason.
     rows_calc = build_rr_control_rows([_watched(rr_class="SETTLEMENT_CALC", determinants=["#RtCalMtr5minQty"], mp_impact=False)])
     assert rows_calc[0]["out_of_scope"] is False
+    assert rows_calc[0]["muted"] is False
     # Determinants render as code chips in the expanded row.
     html = render_rr_control(rows_calc, {"title": "T", "generated": "x", "market": "SPPIM"})
     assert "#RtCalMtr5minQty" in html and "charge code" in html
 
 
+def test_story_column_says_not_applicable_only_when_no_story_will_ever_exist():
+    # SETTLEMENT_RELEVANT/TARIFF_GOVERNANCE never get a Jira story workbook
+    # (jira_template_writer's rule) -> "Not applicable", not a bare dash.
+    rows = build_rr_control_rows([_watched(rr_class="SETTLEMENT_RELEVANT", mp_impact=True)])
+    html = render_rr_control(rows, {"title": "T", "generated": "x", "market": "SPPIM"})
+    assert "Not applicable" in html
+    # A not-yet-classified RR might still get one later -> keep the plain dash,
+    # not a claim that no story applies.
+    rows2 = build_rr_control_rows([_watched(rr_class="", mp_impact=None)])
+    html2 = render_rr_control(rows2, {"title": "T", "generated": "x", "market": "SPPIM"})
+    assert "Not applicable" not in html2
+
+
 def test_class_falls_back_to_stored_then_unclassified():
-    # No resolver: use the stored rr_class if present, else Unclassified.
+    # No resolver: use the stored rr_class if present, else "no RR parsed yet".
     rows = build_rr_control_rows([_watched(rr_class="TARIFF_GOVERNANCE"), _watched(rr_number="999", title="")])
     by_num = {r["rr_number"]: r for r in rows}
     assert by_num["728"]["class_label"] == "Tariff / governance"
-    assert by_num["999"]["class_label"] == "Unclassified"
+    assert by_num["999"]["class_label"] == "No recommendation report"
     assert by_num["999"]["title"] == "(title not captured)"
 
 
