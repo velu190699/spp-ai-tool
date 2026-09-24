@@ -1,0 +1,25 @@
+# Who may change things in the RR Control app.
+#
+# Everyone who can open the app can READ it: the register, the briefing, the
+# library. Only the accounts listed here can record decisions (applies /
+# reviewed / validated initiative) or edit Settings.
+#
+# This list is ours to maintain — changing a PM never needs a ticket to IT.
+#
+# WHAT TO PUT HERE
+#   Deployed behind corporate sign-in : the person's work email address.
+#   Running locally, no sign-in       : their Windows username.
+# Both forms may sit in the list at once; matching ignores case.
+#
+# LEAVING IT EMPTY
+#   Locally, an empty list means "everything is editable" — the only person who
+#   can open the app is the one who started it, so there is nobody to protect it
+#   from. Once the app is on a shared URL this list MUST name the PMs, because
+#   then anyone with the link would otherwise be able to edit.
+#
+# Example:
+#   editors:
+#     - back.office.pm@pcienergysolutions.com    # BO PM
+#     - front.office.pm@pcienergysolutions.com   # FO PM
+
+editors: []

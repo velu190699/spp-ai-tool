@@ -1,0 +1,14 @@
+# Palette lifted from the published dashboard's template so the app and the
+# HTML report read as the same product (see src/control_app/theme.py).
+[theme]
+primaryColor = "#1f4e8c"
+backgroundColor = "#f7f8fa"
+secondaryBackgroundColor = "#ffffff"
+textColor = "#11161d"
+font = "sans serif"
+
+[server]
+runOnSave = true
+
+[browser]
+gatherUsageStats = false
