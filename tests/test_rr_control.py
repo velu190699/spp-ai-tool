@@ -1,4 +1,6 @@
 """RR Control dashboard builder + renderer (src/summaries/rr_control.py)."""
+import re
+
 from src.summaries.rr_control import build_rr_control_rows, render_rr_control, summarize
 
 
@@ -74,6 +76,25 @@ def test_story_column_says_not_applicable_only_when_no_story_will_ever_exist():
     assert "Not applicable" not in html2
 
 
+def test_stale_story_workbook_is_not_linked_for_an_out_of_scope_rr():
+    # Workbooks are historical: the classifier and the story rules were both
+    # tightened on 2026-08-24, so RRs like RR773/RR786 still have a workbook on
+    # disk that today's code would never write. Linking it made the row claim
+    # "No calculation impact" and offer an open story at the same time.
+    rows = build_rr_control_rows(
+        [_watched(rr_class="TARIFF_GOVERNANCE")],
+        story_url_of=lambda rr: "http://stale/RR786_Jira_Stories-20260824-100025.xlsx",
+    )
+    assert rows[0]["story_url"] == ""
+    html = render_rr_control(rows, {"title": "T", "generated": "x", "market": "SPPIM"})
+    assert "Not applicable" in html and "stale" not in html
+    # An in-scope RR still links its workbook.
+    rows2 = build_rr_control_rows(
+        [_watched(rr_class="SETTLEMENT_CALC")], story_url_of=lambda rr: "http://live/wb.xlsx"
+    )
+    assert rows2[0]["story_url"] == "http://live/wb.xlsx"
+
+
 def test_class_falls_back_to_stored_then_unclassified():
     # No resolver: use the stored rr_class if present, else "no RR parsed yet".
     rows = build_rr_control_rows([_watched(rr_class="TARIFF_GOVERNANCE"), _watched(rr_number="999", title="")])
@@ -99,7 +120,38 @@ def test_summarize_counts():
     ]
     rows = build_rr_control_rows(watched, story_url_of=lambda rr: "http://x" if rr == "728" else "")
     stats = summarize(rows)
-    assert stats == {"total": 2, "open": 1, "closed": 1, "settlement_calc": 1, "with_initiative": 1, "with_story": 1}
+    # no_impact counts the TARIFF_GOVERNANCE row: what the "hide" filter removes.
+    assert stats == {"total": 2, "open": 1, "closed": 1, "settlement_calc": 1,
+                     "with_initiative": 1, "with_story": 1, "hideable": 1}
+
+
+def test_hide_filter_covers_every_non_calc_row():
+    # The filter hides everything that is not a confirmed calculation change —
+    # including the unclassified ones: "no Recommendation Report" means SPP never
+    # took the RR to the stage the settlement team reviews.
+    rows = build_rr_control_rows([
+        _watched(rr_number="786", rr_class="TARIFF_GOVERNANCE"),
+        _watched(rr_number="795", rr_class=""),
+        _watched(rr_number="728", rr_class="SETTLEMENT_CALC"),
+    ])
+    assert summarize(rows)["hideable"] == 2
+    html = render_rr_control(rows, {"title": "T", "generated": "x", "market": "SPPIM"})
+    assert 'id="hide-noimpact"' in html
+    for rr in ("786", "795"):
+        assert "oos" in re.search(r'<tr class="rr-row([^"]*)" data-rr="%s"' % rr, html).group(1)
+    # The calc change stays visible.
+    assert "oos" not in re.search(r'<tr class="rr-row([^"]*)" data-rr="728"', html).group(1)
+    # No storage CALLS: they throw SecurityError in the sandboxed viewer.
+    # (The template may still name them in a comment saying why they are avoided.)
+    assert not re.search(r"(?:window\.)?(?:local|session)Storage\s*[.\[]", html)
+
+
+def test_full_report_link_only_when_a_url_is_given():
+    rows = build_rr_control_rows([_watched()])
+    meta = {"title": "T", "generated": "x", "market": "SPPIM"}
+    assert "Market Changes Summary" not in render_rr_control(rows, meta)
+    html = render_rr_control(rows, dict(meta, report_url="http://sp/report.html"))
+    assert 'href="http://sp/report.html"' in html and 'target="_blank"' in html
 
 
 def test_render_is_self_contained_html_with_rows():

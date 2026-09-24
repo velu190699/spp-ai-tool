@@ -616,6 +616,30 @@ def _rr_charge_changes_resolver(config):
     return resolve
 
 
+def _latest_full_report_url(config) -> str:
+    """SharePoint link to the newest published Market Changes Summary ("full report").
+
+    The dashboard had no way to reach it: you had to scroll back through Slack for
+    the link (the gap Miquel raised). This is the register-wide link that lives in
+    the masthead.
+
+    NOT a per-RR link. Briefings are named by run id (``SPP_Market_Changes_Summary
+    -<run_id>.html``) and the state's ``briefings_built`` records only a build
+    timestamp per CUF/SUF edition key — no path — so an RR cannot be mapped to the
+    briefing that actually discussed it. Recording the published path against that
+    key is what a per-row link would need first.
+    """
+    d = config.published_reports_dir
+    if not d.exists():
+        return ""
+    # Same trick as the story workbooks: the sortable run id makes the
+    # lexicographically-last name the newest.
+    matches = sorted(d.glob("SPP_Market_Changes_Summary-*.html"))
+    if not matches:
+        return ""
+    return to_sharepoint_url(matches[-1], config.sharepoint_sync_root, config.sharepoint_base_url)
+
+
 def build_rr_control_html(state: MetadataStore, config, run_id: str, *, state_note: str = "") -> tuple[Path, str]:
     """Render the persistent RR Control dashboard and publish it (dated, accumulating).
 
@@ -640,13 +664,22 @@ def build_rr_control_html(state: MetadataStore, config, run_id: str, *, state_no
             "generated": datetime.now().strftime("%B %d, %Y %H:%M"),
             "market": market,
             "state_note": state_note,
+            "report_url": _latest_full_report_url(config),
         },
     )
     html_path = config.published_control_dir / f"RR_Control-{run_id}.html"
     html_path.parent.mkdir(parents=True, exist_ok=True)
     html_path.write_text(html, encoding="utf-8")
-    LOGGER.info("RR Control dashboard written: %s (%d RRs)", html_path, len(rows))
-    return html_path, to_sharepoint_url(html_path, config.sharepoint_sync_root, config.sharepoint_base_url)
+    # Same bytes, stable name. Every run used to publish ONLY a dated file, so
+    # "the dashboard" was 20+ documents and the only way to reach the current one
+    # was scrolling back through Slack for the newest link. This is the URL that
+    # goes in the Slack channel topic and never changes; the dated files stay as
+    # the history (the register is append-only by design).
+    latest_path = config.published_control_dir / "RR_Control.html"
+    latest_path.write_text(html, encoding="utf-8")
+    LOGGER.info("RR Control dashboard written: %s + %s (%d RRs)", latest_path.name, html_path.name, len(rows))
+    # Callers (Slack) get the stable link, not the dated snapshot.
+    return html_path, to_sharepoint_url(latest_path, config.sharepoint_sync_root, config.sharepoint_base_url)
 
 
 def generate_rr_control() -> int:

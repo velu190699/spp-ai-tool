@@ -66,6 +66,10 @@ def build_rr_control_rows(
                 if m.get("candidate"):
                     hint = m["candidate"]
                     break
+        # Out of scope = classified, but not SETTLEMENT_CALC: no real "#"
+        # charge-code determinant anywhere in the RR. Computed before the row so
+        # the story link can be suppressed for these (see "story_url" below).
+        out_of_scope = rr_class not in ("", "SETTLEMENT_CALC")
         rows.append(
             {
                 "rr_number": rr,
@@ -92,7 +96,7 @@ def build_rr_control_rows(
                 # classifier had to close (see has_determinants there). Drives the
                 # "No calculation impact" badge — excludes "" (unclassified) since we
                 # don't yet know its impact, we just haven't parsed an RR for it.
-                "out_of_scope": rr_class not in ("", "SETTLEMENT_CALC"),
+                "out_of_scope": out_of_scope,
                 # Muted row styling: anything short of a confirmed calc impact,
                 # including unclassified ("" — e.g. RR688, no Recommendation Report
                 # parsed yet). Broader than out_of_scope on purpose — dims the row
@@ -102,7 +106,15 @@ def build_rr_control_rows(
                 "market_initiative": initiative,
                 "market_initiative_citation": w.get("market_initiative_citation", ""),
                 "initiative_hint": hint,
-                "story_url": (story_url_of(rr) if story_url_of else "") or "",
+                # A story workbook only counts while the RR is still IN scope.
+                # Workbooks are historical artifacts: the classifier and the
+                # story rules have both been tightened since some were written
+                # (RR773's review Task and RR786's story predate the 2026-08-24
+                # rules and would not be generated today). Linking any file that
+                # happens to sit in Stories/BO/ made those rows read "open"
+                # forever while the same row said "No calculation impact".
+                # Out-of-scope RRs therefore fall through to "Not applicable".
+                "story_url": ("" if out_of_scope else (story_url_of(rr) if story_url_of else "")) or "",
                 "last_updated": (w.get("last_seen") or "")[:10],
                 "first_seen": (w.get("first_seen") or "")[:10],
                 "mentions": [
@@ -141,6 +153,11 @@ def summarize(rows: list[dict[str, Any]]) -> dict[str, int]:
         "settlement_calc": sum(1 for r in rows if r["rr_class"] == "SETTLEMENT_CALC"),
         "with_initiative": sum(1 for r in rows if r["market_initiative"]),
         "with_story": sum(1 for r in rows if r["story_url"]),
+        # Drives the "hide" filter: every row short of a confirmed calculation
+        # change. Includes the unclassified ones — no Recommendation Report means
+        # SPP never took the RR to the stage the settlement team reviews, so there
+        # is nothing to look at (Eduardo, 2026-09-15).
+        "hideable": sum(1 for r in rows if r["muted"]),
     }
 
 
@@ -249,6 +266,14 @@ _TEMPLATE = """<!DOCTYPE html>
   .tl-init .cite{color:var(--muted); font-size:11.5px;}
   .caret{display:inline-block; width:12px; color:var(--muted); transition:transform .12s;}
   tr.open .caret{transform:rotate(90deg);}
+  tr.hidden{display:none;}
+  .filt{display:inline-flex; align-items:center; gap:7px; font-size:12.5px; color:var(--ink-soft);
+    background:var(--card); border:1px solid var(--line); border-radius:99px; padding:7px 13px; cursor:pointer; user-select:none;}
+  .filt:hover{border-color:var(--line-strong);}
+  .filt input{margin:0; cursor:pointer;}
+  .filt .cnt{color:var(--muted);}
+  .bar{display:flex; flex-wrap:wrap; gap:10px 14px; align-items:center; justify-content:space-between; margin:16px 0 0;}
+  .bar .hint{margin:0;}
   footer{margin-top:30px; padding-top:16px; border-top:2px solid var(--ink); font-size:12px; color:var(--muted);}
   @media (max-width:720px){ .ttl{max-width:none;} table{font-size:13px;} h1{font-size:23px;} }
 </style>
@@ -262,6 +287,7 @@ _TEMPLATE = """<!DOCTYPE html>
     <div class="meta">
       <span><b>Generated:</b> {{ meta.generated }}</span>
       <span><b>Market:</b> {{ meta.market }}</span>
+      {% if meta.report_url %}<span><b>Full report:</b> <a href="{{ meta.report_url }}" target="_blank" rel="noopener noreferrer">open the latest Market Changes Summary</a></span>{% endif %}
       {% if meta.state_note %}<span>{{ meta.state_note }}</span>{% endif %}
     </div>
   </header>
@@ -279,7 +305,10 @@ _TEMPLATE = """<!DOCTYPE html>
   </div>
 
   <div class="panel active" id="panel-control" role="tabpanel" aria-labelledby="tab-control">
-  <p class="hint"><span class="caret" style="color:var(--accent);">&#9656;</span> Tap any row to see the CUF/SUF mention history behind its initiative. Charge-code determinants are on the <b>Determinants</b> tab.</p>
+  <div class="bar">
+    <p class="hint"><span class="caret" style="color:var(--accent);">&#9656;</span> Tap any row to see the CUF/SUF mention history behind its initiative. Charge-code determinants are on the <b>Determinants</b> tab.</p>
+    {% if stats.hideable %}<label class="filt"><input type="checkbox" id="hide-noimpact"> Hide RRs with no calculation change <span class="cnt">({{ stats.hideable }})</span></label>{% endif %}
+  </div>
 
   <table>
     <thead>
@@ -290,7 +319,7 @@ _TEMPLATE = """<!DOCTYPE html>
     <tbody>
       {% for r in rows %}
       <tr class="rr-row{{ ' oos' if r.muted }}" data-rr="{{ r.rr_number }}">
-        <td class="rrid">{% if r.rr_url %}<a href="{{ r.rr_url }}" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation();">RR{{ r.rr_number }}</a>{% else %}RR{{ r.rr_number }}{% endif %}{% if r.domain %}<span class="dom">{{ r.domain }}</span>{% endif %}</td>
+        <td class="rrid">{% if r.rr_url %}<a href="{{ r.rr_url }}" target="_blank" rel="noopener noreferrer">RR{{ r.rr_number }}</a>{% else %}RR{{ r.rr_number }}{% endif %}{% if r.domain %}<span class="dom">{{ r.domain }}</span>{% endif %}</td>
         <td class="ttl"><span class="caret">&#9656;</span> {{ r.title }}{% if r.working_group %}<span class="wg">{{ r.working_group }}</span>{% endif %}</td>
         <td>
           {% if r.out_of_scope %}<span class="scope" title="No # charge-code determinant found anywhere in the RR — prose/governance only, no formula changed.">No calculation impact</span>{% endif %}
@@ -410,7 +439,8 @@ _TEMPLATE = """<!DOCTYPE html>
     });
     var rows = Array.prototype.slice.call(document.querySelectorAll('tr.rr-row'));
     rows.forEach(function(row){
-      row.addEventListener('click', function(){
+      row.addEventListener('click', function(e){
+        if(e.target.closest('a')) return;
         var rr = row.getAttribute('data-rr');
         var exp = document.querySelector('tr.exp[data-exp="'+rr+'"]');
         var isOpen = row.classList.contains('open');
@@ -418,6 +448,23 @@ _TEMPLATE = """<!DOCTYPE html>
         if(exp){ exp.classList.toggle('open', !isOpen); }
       });
     });
+    // Hide/show the RRs that need no action. In-memory only: this page is served
+    // inside a sandboxed iframe (SharePoint and Drive both do this), where
+    // localStorage THROWS SecurityError rather than failing quietly — touching it
+    // would break every listener below it. So the filter resets on each open.
+    var hide = document.getElementById('hide-noimpact');
+    if(hide){
+      hide.addEventListener('change', function(){
+        var on = hide.checked;
+        rows.forEach(function(row){
+          if(!row.classList.contains('oos')) return;
+          var exp = document.querySelector('tr.exp[data-exp="'+row.getAttribute('data-rr')+'"]');
+          if(on){ row.classList.remove('open'); if(exp){ exp.classList.remove('open'); } }
+          row.classList.toggle('hidden', on);
+          if(exp){ exp.classList.toggle('hidden', on); }
+        });
+      });
+    }
     var dets = Array.prototype.slice.call(document.querySelectorAll('.det-rr .rrhead'));
     dets.forEach(function(head){
       head.addEventListener('click', function(){
